@@ -1,5 +1,5 @@
-# VGG_FACE = r'/home/luccas/Documents/NeuralNetworkModels/vgg_face_dag.pth'
-VGG_FACE = r'/home/lucas_fudstorm_com/models/vgg_face_dag.pth'
+# VGG_FACE = r'/home/<user>/Documents/NeuralNetworkModels/vgg_face_dag.pth'
+VGG_FACE = r'/home/<user>/models/vgg_face_dag.pth'
 LOG_DIR = r'logs'
 MODELS_DIR = r'models'
 GENERATED_DIR = r'generated_img'

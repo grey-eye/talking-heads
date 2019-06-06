@@ -1,5 +1,6 @@
 """
-
+This package performs the pre-processing of the VoxCeleb dataset in order to have it ready for training, speeding the
+process up.
 """
 import logging
 import os
@@ -32,11 +33,17 @@ def preprocess_dataset(source, output, device='cpu', size=0, overwrite=False):
     * The frames and the corresponding landmarks for each video will be saved in files (one for each video) in the
     output directory.
 
+    We originally tried to process several videos simultaneously using multiprocessing, but this seems to actually
+    slow down the process instead of speeding it up.
+
+
     :param source: Path to the raw VoxCeleb dataset.
     :param output: Path where the pre-processed videos will be stored.
     :param device: Device used to run the landmark extraction model.
     :param size: Size of the dataset to generate. If 0, the entire raw dataset will be processed, otherwise, as many
     videos will be processed as specified by this parameter.
+    :param overwrite: f True, files that have already been processed will be overwritten, otherwise, they will be
+    ignored and instead, different files will be loaded.
     """
     logging.info('===== DATASET PRE-PROCESSING =====')
     logging.info(f'Running on {device.upper()}.')
@@ -60,6 +67,16 @@ def preprocess_dataset(source, output, device='cpu', size=0, overwrite=False):
 
 
 def get_video_list(source, size, output, overwrite=True):
+    """
+    Extracts a list of paths to videos to pre-process during the current run.
+
+    :param source: Path to the root directory of the dataset.
+    :param size: Number of videos to return.
+    :param output: Path where the pre-processed videos will be stored.
+    :param overwrite: If True, files that have already been processed will be overwritten, otherwise, they will be
+    ignored and instead, different files will be loaded.
+    :return: List of paths to videos.
+    """
     already_processed = []
     if not overwrite:
         already_processed = [
@@ -122,7 +139,9 @@ def contains_only_videos(files, extension='.mp4'):
 
 def extract_frames(video):
     """
-    Extracts all frames of a video file.
+    Extracts all frames of a video file. Frames are extracted in BGR format, but converted to RGB. The shape of the
+    extracted frames is [height, width, channels]. Be aware that PyTorch models expect the channels to be the first
+    dimension.
     :param video: Path to a video file.
     :return: NumPy array of frames in RGB.
     """
@@ -245,6 +264,15 @@ def plot_landmarks(frame, landmarks):
     """
     Creates an RGB image with the landmarks. The generated image will be of the same size as the frame where the face
     matching the landmarks.
+
+    The image is created by plotting the coordinates of the landmarks using matplotlib, and then converting the
+    plot to an image.
+
+    Things to watch out for:
+    * The figure where the landmarks will be plotted must have the same size as the image to create, but matplotlib
+    only accepts the size in inches, so it must be converted to pixels using the DPI of the screen.
+    * A white background is printed on the image (an array of ones) in order to keep the figure from being flipped.
+    * The axis must be turned off and the subplot must be adjusted to remove the space where the axis would normally be.
 
     :param frame: Image with a face matching the landmarks.
     :param landmarks: Landmarks of the provided frame,

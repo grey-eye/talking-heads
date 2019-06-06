@@ -1,3 +1,4 @@
+""" Implementation of the three networks that make up the Talking Heads generative model. """
 from collections import OrderedDict
 
 import torch
@@ -9,6 +10,10 @@ from .adain import adain_direct as adain
 
 
 class Embedder(nn.Module):
+    """
+    The Embedder network attempts to generate a vector that encodes the personal characteristics of an individual given
+    a head-shot and the matching landmarks.
+    """
     def __init__(self):
         super(Embedder, self).__init__()
 

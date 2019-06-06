@@ -1,10 +1,11 @@
+""" In this file, PyTorch modules are defined to be used in the Talking Heads model. """
+
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
 
 class SelfAttention(nn.Module):
-
     def __init__(self, in_dim):
         super(SelfAttention, self).__init__()
 
