@@ -1,9 +1,9 @@
 # Talking Heads
 
-## Descriptions
+## Description
 This project is a PyTorch implementation of [Few-Shot Adversarial Learning of Realistic Neural Talking Head Models](https://arxiv.org/pdf/1905.08233.pdf). In this paper, a GAN has been designed and trained to generate realistic talking head models from a only a few head-shots (potentially just one) and the face landmarks to reproduce.
 
-The paper explains the architecture of the model, but a lot of details are missing, and no official implementations or trained models have been released. Therefore, we are trying to recreate the model as best as we can, and to explain the missing details here.
+The paper explains the architecture of the model, but a lot of details are missing, and no official implementations or trained models have been released. Therefore, we are trying to recreate the model as best as we can, and to explain the missing details here. __**We need your help in order to finish this, please, contribute!**__
 
 ## More implementation details
 **Read the original paper before you continue reading**
