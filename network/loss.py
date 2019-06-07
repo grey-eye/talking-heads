@@ -24,7 +24,7 @@ class TalkingHeadsLoss(object):
             self._loss_mch(e_hat, W_i)
 
     def loss_D(self, r_x, r_x_hat):
-        return max(0, 1 + r_x_hat) + max(0, 1 - r_x)
+        return max(torch.zeros([1]), 1 + r_x_hat) + max(torch.zeros([1]), 1 - r_x)
 
     # region Internal Functions
     def _loss_cnt(self, x, x_hat):
@@ -35,7 +35,6 @@ class TalkingHeadsLoss(object):
         vgg19_loss = 0
         for i in range(0, len(vgg19_x)):
             vgg19_loss += F.l1_loss(vgg19_x_hat[i], vgg19_x[i])
-        # vgg19_loss = vgg19_loss / len(vgg19_x)
 
         # VGG Face Loss
         vgg_face_x_hat = self.VGG_FACE_AC(x_hat.unsqueeze(0))
@@ -44,7 +43,6 @@ class TalkingHeadsLoss(object):
         vgg_face_loss = 0
         for i in range(0, len(vgg_face_x)):
             vgg_face_loss += F.l1_loss(vgg_face_x_hat[i], vgg_face_x[i])
-        # vgg_face_loss = vgg_face_loss / len(vgg_face_x)
 
         return vgg19_loss * config.LOSS_VGG19_WEIGHT + vgg_face_loss * config.LOSS_VGG_FACE_WEIGHT
 
