@@ -9,6 +9,15 @@ from .components import ResidualBlock, ResidualBlockDown, ResidualBlockUp, SelfA
 from .adain import adain_direct as adain
 
 
+def weights_init(m):
+    classname = m.__class__.__name__
+    if classname.find('Conv2d') != -1:
+        m.weight.data.normal_(0.0, 0.02)
+    elif classname.find('InstanceNorm2d') != -1:
+        m.weight.data.normal_(1.0, 0.02)
+        m.bias.data.fill_(0)
+
+
 class Embedder(nn.Module):
     """
     The Embedder network attempts to generate a vector that encodes the personal characteristics of an individual given
@@ -24,6 +33,8 @@ class Embedder(nn.Module):
         self.conv4 = ResidualBlockDown(256, 512)
 
         self.pooling = nn.AdaptiveMaxPool2d((1, 1))
+
+        self.apply(weights_init)
 
     def forward(self, x, y):
         assert list(x.shape) == [3, 224, 224], "Both x and y must be tensors with shape HWC [3, 224, 224]."
@@ -60,7 +71,7 @@ class Generator(nn.Module):
 
         # projection layer
         self.PSI_PORTIONS, psi_length = self.define_psi_slices()
-        self.projection = nn.Parameter(torch.rand(psi_length, 512))
+        self.projection = nn.Parameter(torch.rand(psi_length, 512).normal_(0.0, 0.02))
 
         # encoding layers
         self.conv1 = ResidualBlockDown(3, 64)
@@ -86,18 +97,12 @@ class Generator(nn.Module):
 
         # decoding layers
         self.deconv4 = ResidualBlockUp(512, 256, upsample=2)
-        # self.in4_d = nn.InstanceNorm2d(256, affine=True)
-
         self.deconv3 = ResidualBlockUp(256, 128, upsample=2)
-        # self.in3_d = nn.InstanceNorm2d(128, affine=True)
-
         self.att2 = SelfAttention(128)
-
         self.deconv2 = ResidualBlockUp(128, 64, upsample=2)
-        # self.in2_d = nn.InstanceNorm2d(64, affine=True)
-
         self.deconv1 = ResidualBlockUp(64, 3, upsample=2)
-        # self.in1_d = nn.InstanceNorm2d(3, affine=True)
+
+        self.apply(weights_init)
 
     def forward(self, y, e):
         assert list(y.shape) == [3, 224, 224], "Vector y must have shape HWC [3, 224, 224]"
@@ -187,9 +192,11 @@ class Discriminator(nn.Module):
 
         self.pooling = nn.AdaptiveMaxPool2d((1, 1))
 
-        self.W = nn.Parameter(torch.rand(512, training_videos)/1000)
-        self.w_0 = nn.Parameter(torch.rand(512, 1)/1000)
-        self.b = nn.Parameter(torch.rand(1)/1000)
+        self.W = nn.Parameter(torch.rand(512, training_videos).normal_(0.0, 0.02))
+        self.w_0 = nn.Parameter(torch.rand(512, 1).normal_(0.0, 0.02))
+        self.b = nn.Parameter(torch.rand(1).normal_(0.0, 0.02))
+
+        self.apply(weights_init)
 
     def forward(self, x, y, i):
         assert list(x.shape) == [3, 224, 224], "Both x and y must be tensors with shape HWC [3, 224, 224]."

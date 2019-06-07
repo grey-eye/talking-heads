@@ -5,6 +5,12 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 
+def init_conv(conv):
+    nn.init.xavier_uniform_(conv.weight)
+    if conv.bias is not None:
+        conv.bias.data.zero_()
+
+
 class SelfAttention(nn.Module):
     def __init__(self, in_dim):
         super(SelfAttention, self).__init__()
@@ -15,10 +21,6 @@ class SelfAttention(nn.Module):
         self.gamma = nn.Parameter(torch.zeros(1))
 
         self.softmax = nn.Softmax(dim=-1)
-
-        self.init_conv(self.query_conv)
-        self.init_conv(self.key_conv)
-        self.init_conv(self.value_conv)
 
     def forward(self, x):
         # B: mini batches, C: channels, W: width, H: height
@@ -35,12 +37,6 @@ class SelfAttention(nn.Module):
         out = self.gamma * out + x
 
         return out
-
-    @staticmethod
-    def init_conv(conv):
-        nn.init.xavier_uniform_(conv.weight)
-        if conv.bias is not None:
-            conv.bias.data.zero_()
 
 
 class ConvLayer(nn.Module):
