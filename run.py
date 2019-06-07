@@ -126,11 +126,11 @@ def meta_train(device, dataset_path, continue_id):
             batch_durations.append(batch_end - batch_start)
             # SHOW PROGRESS --------------------------------------------------------------------------------------------
             if (batch_num + 1) % 100 == 0 or batch_num == 0:
-                logging.info(f'Epoch {epoch+1}: [{batch_num + 1}/{len(dataset)}] |'
-                             f'Duration: {batch_durations[-1]} '
-                             f'Average: {sum(batch_durations, timedelta(0)) / len(batch_durations)} |'
-                             f'Loss_E_G = {loss_E_G.item()} Loss_D {loss_D.item()}')
-                logging.debug(f'D(x) = {r_x.item()} D(x_hat) = {r_x_hat.item()}')
+                avg_time = sum(batch_durations, timedelta(0)) / len(batch_durations)
+                logging.info(f'Epoch {epoch+1}: [{batch_num + 1}/{len(dataset)}] | '
+                             f'Avg Time: {avg_time} | '
+                             f'Loss_E_G = {loss_E_G.item():.4} Loss_D {loss_D.item():.4}')
+                logging.debug(f'D(x) = {r_x.item():.4} D(x_hat) = {r_x_hat.item():.4}')
 
             # SAVE IMAGES ----------------------------------------------------------------------------------------------
             if (batch_num + 1) % 100 == 0:
@@ -152,7 +152,7 @@ def meta_train(device, dataset_path, continue_id):
         save_model(D, device, run_start)
         epoch_end = datetime.now()
         logging.info(f'Epoch {epoch+1} finished in {epoch_end - epoch_start}. '
-                     f'Average batch duration: {sum(batch_durations, timedelta(0)) / len(batch_durations)}')
+                     f'Average batch time: {sum(batch_durations, timedelta(0)) / len(batch_durations)}')
 
 
 def save_model(model, gpu, time_for_name=None):

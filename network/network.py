@@ -41,8 +41,7 @@ class Embedder(nn.Module):
         out = F.relu(self.conv4(out))
 
         # Vectorize
-        out = self.pooling(out).view(512, 1)
-        out = F.relu(out)
+        out = F.relu(self.pooling(out).view(512, 1))
 
         return out
 
@@ -61,7 +60,7 @@ class Generator(nn.Module):
 
         # projection layer
         self.PSI_PORTIONS, psi_length = self.define_psi_slices()
-        self.projection = nn.Parameter(torch.ones(psi_length, 512))
+        self.projection = nn.Parameter(torch.rand(psi_length, 512))
 
         # encoding layers
         self.conv1 = ResidualBlockDown(3, 64)
@@ -188,9 +187,9 @@ class Discriminator(nn.Module):
 
         self.pooling = nn.AdaptiveMaxPool2d((1, 1))
 
-        self.W = nn.Parameter(torch.ones(512, training_videos))
-        self.w_0 = nn.Parameter(torch.zeros(512, 1))
-        self.b = nn.Parameter(torch.zeros(1))
+        self.W = nn.Parameter(torch.rand(512, training_videos)/1000)
+        self.w_0 = nn.Parameter(torch.rand(512, 1)/1000)
+        self.b = nn.Parameter(torch.rand(1)/1000)
 
     def forward(self, x, y, i):
         assert list(x.shape) == [3, 224, 224], "Both x and y must be tensors with shape HWC [3, 224, 224]."
