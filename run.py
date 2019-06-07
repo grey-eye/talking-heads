@@ -64,9 +64,8 @@ def meta_train(device, dataset_path, continue_id):
         lr=config.LEARNING_RATE_D
     )
 
-    criteria = network.TalkingHeadsLoss(device)
-    criterion_E_G = criteria.loss_E_G
-    criterion_D = criteria.loss_D
+    criterion_E_G = network.LossEG(device, feed_forward=True)
+    criterion_D = network.LossD(device)
 
     # TRAINING LOOP ----------------------------------------------------------------------------------------------------
     logging.info(f'Starting training loop. Epochs: {config.EPOCHS} Dataset Size: {len(dataset)}')
@@ -99,13 +98,13 @@ def meta_train(device, dataset_path, continue_id):
             x_hat = G(y_t, e_hat)
 
             # Optimize E_G and D
-            r_x_hat, _ = D(x_hat, y_t, i)
-            r_x, __ = D(x_t, y_t, i)
+            r_x_hat, D_act_hat = D(x_hat, y_t, i)
+            r_x, D_act = D(x_t, y_t, i)
 
             optimizer_E_G.zero_grad()
             optimizer_D.zero_grad()
 
-            loss_E_G = criterion_E_G(x_t, x_hat, r_x_hat, e_hat, D.W[:, i], _)
+            loss_E_G = criterion_E_G(x_t, x_hat, r_x_hat, e_hat, D.W[:, i], D_act, D_act_hat)
             loss_D = criterion_D(r_x, r_x_hat)
             loss = loss_E_G + loss_D
             loss.backward(retain_graph=True)
@@ -114,8 +113,8 @@ def meta_train(device, dataset_path, continue_id):
             optimizer_D.step()
 
             # Optimize D again
-            r_x_hat, _ = D(G(y_t, e_hat), y_t, i)
-            r_x, __ = D(x_t, y_t, i)
+            r_x_hat, D_act_hat = D(G(y_t, e_hat), y_t, i)
+            r_x, D_act = D(x_t, y_t, i)
 
             optimizer_D.zero_grad()
             loss_D = criterion_D(r_x, r_x_hat)
