@@ -15,7 +15,7 @@ The Talking Heads model was trained using the [VoxCeleb2](http://www.robots.ox.a
 The download consists of 9 files of around 30GB each. Downloading directly from their servers is too slow, so we strongly recommend downloading the version that they have in Google Drive, which will download at around 25MB/s. You can easily download them using the [GDrive CLI client](https://github.com/gdrive-org/gdrive). After download, you'll have to concatenate the files together, and then extract them from the zip. Both steps will also take a considerable amount of time given the great size of the download. Make sure you have enough free space on your disk.
 
 #### Landmarks Generation
-As the paper explains, landmarks are extracted from the faces using the [Face Alignment] (https://github.com/1adrianb/face-alignment) PyTorch library. This library is easy to install using Pip, and easy to use. However, it should be noted that executing the face extraction model __turns autograd off__, so you'll have to turn it back on if you're planning on training a PyTorch model after using the library on the same run. 
+As the paper explains, landmarks are extracted from the faces using the [Face Alignment](https://github.com/1adrianb/face-alignment) PyTorch library. This library is easy to install using Pip, and easy to use. However, it should be noted that executing the face extraction model __turns autograd off__, so you'll have to turn it back on if you're planning on training a PyTorch model after using the library on the same run. 
 The generated landmarks are returned as a vector of coordinates.
 
 #### Preparation
@@ -48,6 +48,8 @@ The Generator is supposed to have the same structure, while the Embedder and the
 The first change that is done to this architecture, is that the encoder and decoder layers are replaced with a downscaling and upscaling residual layers, similar to Figure 15 in [Large Scale GAN Training for High Fidelity Natural Image Synthesis](https://arxiv.org/pdf/1809.11096.pdf) ([code](https://github.com/AaronLeong/BigGAN-pytorch/blob/master/model_resnet.py)).
 
 In `network.components`, we implemented these residual modules, based on the implementation of the previously mentioned paper. The main networks, however, are located in `network.network`.
+
+There's no information in the paper about how they initialized the different weights of the networks, so we just decided on normal distributions with std 0.2.
 
 #### Embedder
 The Embedder is the simplest network of the three: it is for the greatest part just the encoder component of the previously mentioned StyleTransfer architecture. The changes are few:
@@ -83,7 +85,9 @@ In the paper they calculate the loss of content by comparing the activations of 
 At this point we have access to both networks' structure and weights, but we still need to extract the activations of certain intermediate layers, which we do with the `VGG_Activations` module that we implemented in the same package.
 
 #### Loss ADV
-The adversary component of the loss function, is simply the realism score produced by the Discriminator when fed a generated image, which needs to be maximized. This value is also modified by the Loss FM. However, it's not clear by reading the paper what this loss represents and how it is calculated. They only say that it's calculated using the intermediate activations of the Discriminator. For now, we've ignored this component.
+The adversary component of the loss function has two components:
+ * The realism score produced by the Discriminator when fed a generated image, which needs to be maximized. 
+ * The Feature Matching loss as proposed in [High-Resolution Image Synthesis and Semantic Manipulation with Conditional GANs](https://arxiv.org/pdf/1711.11585v2.pdf).
 
 #### Loss MCH
 This matching loss is supposed to encourage the columns of the W matrix in the Discriminator to resemble the encodings of the Embedder network. In their experiments, they found that they could still produce good results (especially for one shot talking head models) when not using this component, although by ignoring it, it's not possible to perform fine-tuning. So for now, we've also ignored it, but it's implemented.
