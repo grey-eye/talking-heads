@@ -44,7 +44,7 @@ class LossEG(nn.Module):
     def loss_fm(self, d_act, d_act_hat):
         loss = 0
         for i in range(0, len(d_act)):
-            loss += F.l1_loss(d_act[i], d_act_hat[i])  # / d_act[i].numel()
+            loss += F.l1_loss(d_act[i], d_act_hat[i])
 
         return loss
 
@@ -66,4 +66,4 @@ class LossD(nn.Module):
         self.zero = torch.zeros([1]).type(self.dtype)
 
     def forward(self, r_x, r_x_hat):
-        return (1 + r_x_hat) + (1 - r_x)
+        return torch.max(self.zero, (1 + r_x_hat)) + torch.max(self.zero, (1 - r_x))
