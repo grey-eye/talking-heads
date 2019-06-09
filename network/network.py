@@ -26,11 +26,15 @@ class Embedder(nn.Module):
     def __init__(self):
         super(Embedder, self).__init__()
 
+        # TODO: We need 6 downsize layers, but channels are between 64 and 512, do we stop adding channels after conv4?
+
         self.conv1 = ResidualBlockDown(6, 64)
         self.conv2 = ResidualBlockDown(64, 128)
         self.conv3 = ResidualBlockDown(128, 256)
         self.att = SelfAttention(256)
         self.conv4 = ResidualBlockDown(256, 512)
+        self.conv5 = ResidualBlockDown(512, 512)
+        self.conv6 = ResidualBlockDown(512, 512)
 
         self.pooling = nn.AdaptiveMaxPool2d((1, 1))
 
@@ -50,6 +54,8 @@ class Embedder(nn.Module):
         out = F.relu(self.conv3(out))
         out = self.att(out)
         out = F.relu(self.conv4(out))
+        out = F.relu(self.conv5(out))
+        out = F.relu(self.conv6(out))
 
         # Vectorize
         out = F.relu(self.pooling(out).view(512, 1))
@@ -134,14 +140,6 @@ class Generator(nn.Module):
         out = F.relu(adain(self.deconv2(out), *self.slice_psi(psi_hat, 'deconv2')))
         out = torch.tanh(adain(self.deconv1(out), *self.slice_psi(psi_hat, 'deconv1')))
 
-        # region OLD DECODE
-        # out = F.relu(self.in4_d(self.deconv4(out)))
-        # out = F.relu(self.in3_d(self.deconv3(out)))
-        # out = self.att2(out)
-        # out = F.relu(self.in2_d(self.deconv2(out)))
-        # out = torch.tanh(self.in1_d(self.deconv1(out)))
-        # endregion
-
         return out[0]
 
     # def slice_psi(self, psi, portion):
@@ -185,10 +183,9 @@ class Discriminator(nn.Module):
         self.conv3 = ResidualBlockDown(128, 256)
         self.att = SelfAttention(256)
         self.conv4 = ResidualBlockDown(256, 512)
-
+        self.conv5 = ResidualBlockDown(512, 512)
+        self.conv6 = ResidualBlockDown(512, 512)
         self.res_block = ResidualBlock(512)
-
-        # self.conv_extra = ResidualBlockDown(512, 512, kernel_size=7, stride=7, padding=0)
 
         self.pooling = nn.AdaptiveMaxPool2d((1, 1))
 
@@ -212,13 +209,15 @@ class Discriminator(nn.Module):
         out_2 = F.relu(self.conv3(out_1))
         out_3 = self.att(out_2)
         out_4 = F.relu(self.conv4(out_3))
-
-        out = self.res_block(out_4)  # TODO: This should operate at 4x4 pixels?
+        out_5 = F.relu(self.conv5(out_4))
+        out_6 = F.relu(self.conv6(out_5))
+        out_7 = self.res_block(out_6)
 
         # Vectorize
-        out = F.relu(self.pooling(out).view(512, 1))
+        out = F.relu(self.pooling(out_7).view(512, 1))
 
         # Calculate Realism Score
-        out = torch.tanh(torch.mm(out.t(), self.W[:, i].view(-1, 1) + self.w_0) + self.b)
+        out = torch.mm(out.t(), self.W[:, i].view(-1, 1) + self.w_0) + self.b
+        # out = torch.tanh(out)
 
-        return out, [out_0, out_1, out_2, out_3, out_4]
+        return out, [out_0, out_1, out_2, out_3, out_4, out_5, out_6, out_7]
