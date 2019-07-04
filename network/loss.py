@@ -66,4 +66,4 @@ class LossD(nn.Module):
         self.zero = torch.zeros([1]).type(self.dtype)
 
     def forward(self, r_x, r_x_hat):
-        return (1 + r_x_hat) + (1 - r_x)
+        return F.relu(1 + r_x_hat[0]) + F.relu(1 - r_x[0])
