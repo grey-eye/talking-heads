@@ -107,13 +107,14 @@ def meta_train(device, dataset_path, continue_id):
             loss_E_G = criterion_E_G(x_t, x_hat, r_x_hat, e_hat, D.W[:, i], D_act, D_act_hat)
             loss_D = criterion_D(r_x, r_x_hat)
             loss = loss_E_G + loss_D
-            loss.backward(retain_graph=True)
+            loss.backward()
 
             optimizer_E_G.step()
             optimizer_D.step()
 
             # Optimize D again
-            r_x_hat, D_act_hat = D(G(y_t, e_hat), y_t, i)
+            x_hat = G(y_t, e_hat).detach()
+            r_x_hat, D_act_hat = D(x_hat, y_t, i)
             r_x, D_act = D(x_t, y_t, i)
 
             optimizer_D.zero_grad()
