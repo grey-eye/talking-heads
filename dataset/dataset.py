@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from face_alignment import FaceAlignment, LandmarksType
 from torch.utils.data import Dataset
+import torch
 
 import config
 
@@ -194,7 +195,7 @@ def save_video(path, video_id, frames, face_alignment):
     data = []
     for i in range(len(frames)):
         x = frames[i]
-        y = face_alignment.get_landmarks(x)[0]
+        y = face_alignment.get_landmarks_from_image(x)[0]
         data.append({
             'frame': x,
             'landmarks': y,
@@ -248,16 +249,19 @@ class VoxCelebDataset(Dataset):
         data = pkl.load(open(path, 'rb'))
         if self.shuffle_frames:
             random.shuffle(data)
-        out = []
+
+        data_array = []
         for d in data:
             x = PIL.Image.fromarray(d['frame'], 'RGB')
             y = plot_landmarks(d['frame'], d['landmarks'])
             if self.transform:
                 x = self.transform(x)
                 y = self.transform(y)
-            out.append({'frame': x, 'landmarks': y})
+            assert torch.is_tensor(x), "The source images must be converted to Tensors."
+            data_array.append(torch.stack((x, y)))
+        data_array = torch.stack(data_array)
 
-        return real_idx, out
+        return real_idx, data_array
 
 
 def plot_landmarks(frame, landmarks):

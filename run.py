@@ -9,6 +9,7 @@ import torch
 from PIL import Image
 from torch.optim import Adam
 from torchvision import transforms
+from torch.utils.data import DataLoader
 
 import config
 import network
@@ -37,12 +38,13 @@ def meta_train(device, dataset_path, continue_id):
         shuffle=False,
         shuffle_frames=True,
         transform=transforms.Compose([
-                transforms.Resize(config.IMAGE_SIZE),
-                transforms.CenterCrop(config.IMAGE_SIZE),
-                transforms.ToTensor(),
-                transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+            transforms.Resize(config.IMAGE_SIZE),
+            transforms.CenterCrop(config.IMAGE_SIZE),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
         ])
     )
+    dataset = DataLoader(dataset, batch_size=config.BATCH_SIZE, num_workers=0)
 
     # NETWORK ----------------------------------------------------------------------------------------------------------
 
@@ -80,21 +82,21 @@ def meta_train(device, dataset_path, continue_id):
 
         for batch_num, (i, video) in enumerate(dataset):
             batch_start = datetime.now()
+            video = video.type(dtype)  # [B, K+1, 2, C, W, H]
 
             # Put one frame aside (frame t)
-            t = video.pop()
+            t = video[:, -1, ...]  # [B, 2, C, W, H]
+            video = video[:, :-1, ...]  # [B, K, C, W, H]
+            dims = video.shape
 
             # Calculate average encoding vector for video
-            e_vectors = []
-            for s in video:
-                x_s = s['frame'].type(dtype)
-                y_s = s['landmarks'].type(dtype)
-                e_vectors.append(E(x_s, y_s))
-            e_hat = torch.stack(e_vectors).mean(dim=0)
+            e_in = video.reshape(dims[0] * dims[1], dims[2], dims[3], dims[4], dims[5])  # [BxK, 2, C, W, H]
+            x, y = e_in[:, 0, ...], e_in[:, 1, ...]
+            e_vectors = E(x, y).reshape(dims[0], dims[1], -1, 1)  # B, K, len(e), 1
+            e_hat = e_vectors.mean(dim=1)
 
             # Generate frame using landmarks from frame t
-            x_t = t['frame'].type(dtype)
-            y_t = t['landmarks'].type(dtype)
+            x_t, y_t = t[:, 0, ...], t[:, 1, ...]
             x_hat = G(y_t, e_hat)
 
             # Optimize E_G and D
