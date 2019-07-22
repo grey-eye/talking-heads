@@ -1,7 +1,8 @@
-numpy
-opencv-python-headless
-face-alignment
-matplotlib
-torch
-torchvision
-Pillow
+face-alignment==1.0.0
+torch==1.1.0
+torchvision==0.3.0
+
+matplotlib==3.1.1
+numpy==1.16.4
+opencv-python==4.1.0.25
+Pillow==6.1.0
