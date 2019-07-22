@@ -5,8 +5,9 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-from .components import ResidualBlock, ResidualBlockDown, ResidualBlockUp, SelfAttention
-from .adain import adain_direct as adain
+from .components import ResidualBlock, AdaptiveResidualBlock, ResidualBlockDown, AdaptiveResidualBlockUp, SelfAttention
+
+E_VECTOR_LENGTH = 512
 
 
 def weights_init(m):
@@ -26,8 +27,6 @@ class Embedder(nn.Module):
     def __init__(self):
         super(Embedder, self).__init__()
 
-        # TODO: We need 6 downsize layers, but channels are between 64 and 512, do we stop adding channels after conv4?
-
         self.conv1 = ResidualBlockDown(6, 64)
         self.conv2 = ResidualBlockDown(64, 128)
         self.conv3 = ResidualBlockDown(128, 256)
@@ -41,43 +40,48 @@ class Embedder(nn.Module):
         self.apply(weights_init)
 
     def forward(self, x, y):
-        assert list(x.shape) == [3, 224, 224], "Both x and y must be tensors with shape HWC [3, 224, 224]."
-        assert x.shape == y.shape, "Both x and y must be tensors with shape HWC [3, 224, 224]."
+        assert x.dim() == 4 and x.shape[1] == 3, "Both x and y must be tensors with shape [BxK, 3, W, H]."
+        assert x.shape == y.shape, "Both x and y must be tensors with shape [BxK, 3, W, H]."
 
-        # Concatenate x & y and shape them into a [1, 6, 224, 224] array
-        out = torch.cat((x, y), dim=0)
-        out = out.unsqueeze(0)
+        # Concatenate x & y
+        out = torch.cat((x, y), dim=1)  # [BxK, 6, 256, 256]
 
         # Encode
-        out = F.relu(self.conv1(out))
-        out = F.relu(self.conv2(out))
-        out = F.relu(self.conv3(out))
+        out = F.relu(self.conv1(out))  # [BxK, 64, 128, 128]
+        out = F.relu(self.conv2(out))  # [BxK, 128, 64, 64]
+        out = F.relu(self.conv3(out))  # [BxK, 256, 32, 32]
         out = self.att(out)
-        out = F.relu(self.conv4(out))
-        out = F.relu(self.conv5(out))
-        out = F.relu(self.conv6(out))
+        out = F.relu(self.conv4(out))  # [BxK, 512, 16, 16]
+        out = F.relu(self.conv5(out))  # [BxK, 512, 8, 8]
+        out = F.relu(self.conv6(out))  # [BxK, 512, 4, 4]
 
         # Vectorize
-        out = F.relu(self.pooling(out).view(512, 1))
+        out = F.relu(self.pooling(out).view(-1, E_VECTOR_LENGTH, 1))
 
         return out
 
 
 class Generator(nn.Module):
-    PSI_WIDTH = 32
     ADAIN_LAYERS = OrderedDict([
-        ('deconv4', 256),
-        ('deconv3', 128),
-        ('deconv2', 64),
-        ('deconv1', 3)
+        ('res1', (512, 512)),
+        ('res2', (512, 512)),
+        ('res3', (512, 512)),
+        ('res4', (512, 512)),
+        ('res5', (512, 512)),
+        ('deconv6', (512, 512)),
+        ('deconv5', (512, 512)),
+        ('deconv4', (512, 256)),
+        ('deconv3', (256, 128)),
+        ('deconv2', (128, 64)),
+        ('deconv1', (64, 3))
     ])
 
     def __init__(self):
         super(Generator, self).__init__()
 
         # projection layer
-        self.PSI_PORTIONS, psi_length = self.define_psi_slices()
-        self.projection = nn.Parameter(torch.rand(psi_length, 512).normal_(0.0, 0.02))
+        self.PSI_PORTIONS, self.psi_length = self.define_psi_slices()
+        self.projection = nn.Parameter(torch.rand(self.psi_length, E_VECTOR_LENGTH).normal_(0.0, 0.02))
 
         # encoding layers
         self.conv1 = ResidualBlockDown(3, 64)
@@ -94,80 +98,81 @@ class Generator(nn.Module):
         self.conv4 = ResidualBlockDown(256, 512)
         self.in4_e = nn.InstanceNorm2d(512, affine=True)
 
+        self.conv5 = ResidualBlockDown(512, 512)
+        self.in5_e = nn.InstanceNorm2d(512, affine=True)
+
+        self.conv6 = ResidualBlockDown(512, 512)
+        self.in6_e = nn.InstanceNorm2d(512, affine=True)
+
         # residual layers
-        self.res1 = ResidualBlock(512)
-        self.res2 = ResidualBlock(512)
-        self.res3 = ResidualBlock(512)
-        self.res4 = ResidualBlock(512)
-        self.res5 = ResidualBlock(512)
+        self.res1 = AdaptiveResidualBlock(512)
+        self.res2 = AdaptiveResidualBlock(512)
+        self.res3 = AdaptiveResidualBlock(512)
+        self.res4 = AdaptiveResidualBlock(512)
+        self.res5 = AdaptiveResidualBlock(512)
 
         # decoding layers
-        self.deconv4 = ResidualBlockUp(512, 256, upsample=2)
-        self.deconv3 = ResidualBlockUp(256, 128, upsample=2)
+        self.deconv6 = AdaptiveResidualBlockUp(512, 512, upsample=2)
+        self.deconv5 = AdaptiveResidualBlockUp(512, 512, upsample=2)
+        self.deconv4 = AdaptiveResidualBlockUp(512, 256, upsample=2)
+        self.deconv3 = AdaptiveResidualBlockUp(256, 128, upsample=2)
         self.att2 = SelfAttention(128)
-        self.deconv2 = ResidualBlockUp(128, 64, upsample=2)
-        self.deconv1 = ResidualBlockUp(64, 3, upsample=2)
+        self.deconv2 = AdaptiveResidualBlockUp(128, 64, upsample=2)
+        self.deconv1 = AdaptiveResidualBlockUp(64, 3, upsample=2)
 
         self.apply(weights_init)
 
     def forward(self, y, e):
-        assert list(y.shape) == [3, 224, 224], "Vector y must have shape HWC [3, 224, 224]"
-
-        # Shape y into a [1, 3, 224, 224] array
-        out = y.unsqueeze(0)
+        out = y  # [B, 3, 256, 256]
 
         # Calculate psi_hat parameters
-        psi_hat = torch.mm(self.projection, e).view(-1)
+        P = self.projection.unsqueeze(0)
+        P = P.expand(e.shape[0], self.psi_length, E_VECTOR_LENGTH)
+        psi_hat = torch.bmm(P, e)
 
         # Encode
-        out = F.relu(self.in1_e(self.conv1(out)))
-        out = F.relu(self.in2_e(self.conv2(out)))
-        out = F.relu(self.in3_e(self.conv3(out)))
+        out = F.relu(self.in1_e(self.conv1(out)))  # [B, 64, 128, 128]
+        out = F.relu(self.in2_e(self.conv2(out)))  # [B, 128, 64, 64]
+        out = F.relu(self.in3_e(self.conv3(out)))  # [B, 256, 32, 32]
         out = self.att1(out)
-        out = F.relu(self.in4_e(self.conv4(out)))
+        out = F.relu(self.in4_e(self.conv4(out)))  # [B, 512, 16, 16]
+        out = F.relu(self.in5_e(self.conv5(out)))  # [B, 512, 8, 8]
+        out = F.relu(self.in6_e(self.conv6(out)))  # [B, 512, 4, 4]
 
         # Residual layers
-        out = self.res1(out)
-        out = self.res2(out)
-        out = self.res3(out)
-        out = self.res4(out)
-        out = self.res5(out)
+        out = self.res1(out, *self.slice_psi(psi_hat, 'res1'))
+        out = self.res2(out, *self.slice_psi(psi_hat, 'res2'))
+        out = self.res3(out, *self.slice_psi(psi_hat, 'res3'))
+        out = self.res4(out, *self.slice_psi(psi_hat, 'res4'))
+        out = self.res5(out, *self.slice_psi(psi_hat, 'res5'))
 
         # Decode
-        out = F.relu(adain(self.deconv4(out), *self.slice_psi(psi_hat, 'deconv4')))
-        out = F.relu(adain(self.deconv3(out), *self.slice_psi(psi_hat, 'deconv3')))
+        out = F.relu(self.deconv6(out, *self.slice_psi(psi_hat, 'deconv6')))  # [B, 512, 4, 4]
+        out = F.relu(self.deconv5(out, *self.slice_psi(psi_hat, 'deconv5')))  # [B, 512, 16, 16]
+        out = F.relu(self.deconv4(out, *self.slice_psi(psi_hat, 'deconv4')))  # [B, 256, 32, 32]
+        out = F.relu(self.deconv3(out, *self.slice_psi(psi_hat, 'deconv3')))  # [B, 128, 64, 64]
         out = self.att2(out)
-        out = F.relu(adain(self.deconv2(out), *self.slice_psi(psi_hat, 'deconv2')))
-        out = torch.tanh(adain(self.deconv1(out), *self.slice_psi(psi_hat, 'deconv1')))
+        out = F.relu(self.deconv2(out, *self.slice_psi(psi_hat, 'deconv2')))  # [B, 64, 128, 128]
+        out = self.deconv1(out, *self.slice_psi(psi_hat, 'deconv1'))  # [B, 3, 256, 256]
 
-        return out[0]
+        # out = F.sigmoid(out) * 255
 
-    # def slice_psi(self, psi, portion):
-    #     idx0, idx1 = self.PSI_PORTIONS[portion]
-    #     return psi[idx0:idx1].view(1, -1, self.PSI_WIDTH)
-    #
-    # def define_psi_slices(self):
-    #     out = {}
-    #     d = self.ADAIN_LAYERS
-    #     start_idx, end_idx = 0, 0
-    #     for layer in d:
-    #         end_idx = start_idx + d[layer] * self.PSI_WIDTH
-    #         out[layer] = (start_idx, end_idx)
-    #         start_idx = end_idx
-    #
-    #     return out, end_idx
+        return out
 
     def slice_psi(self, psi, portion):
         idx0, idx1 = self.PSI_PORTIONS[portion]
-        aux = psi[idx0:idx1].view(2, -1)
-        return aux[0].view(1, -1, 1, 1), aux[1].view(1, -1, 1, 1)
+        len1, len2 = self.ADAIN_LAYERS[portion]
+        aux = psi[:, idx0:idx1]
+        mean1, std1 = aux[:, 0:len1], aux[:, len1:2 * len1]
+        mean2, std2 = aux[:, 2 * len1:2 * len1 + len2], aux[:, 2 * len1 + len2:]
+        return mean1, std1, mean2, std2
 
     def define_psi_slices(self):
         out = {}
         d = self.ADAIN_LAYERS
         start_idx, end_idx = 0, 0
         for layer in d:
-            end_idx = start_idx + d[layer] * 2
+            end_idx = start_idx + d[layer][0] * 2 + d[layer][1] * 2
             out[layer] = (start_idx, end_idx)
             start_idx = end_idx
 
@@ -196,28 +201,30 @@ class Discriminator(nn.Module):
         self.apply(weights_init)
 
     def forward(self, x, y, i):
-        assert list(x.shape) == [3, 224, 224], "Both x and y must be tensors with shape HWC [3, 224, 224]."
-        assert x.shape == y.shape, "Both x and y must be tensors with shape HWC [3, 224, 224]."
+        assert x.dim() == 4 and x.shape[1] == 3, "Both x and y must be tensors with shape [BxK, 3, W, H]."
+        assert x.shape == y.shape, "Both x and y must be tensors with shape [BxK, 3, W, H]."
 
-        # Concatenate x & y and shape them into a [1, 6, 224, 224] array
-        out = torch.cat((x, y), dim=0)
-        out = out.unsqueeze(0)
+        # Concatenate x & y
+        out = torch.cat((x, y), dim=1)  # [B, 6, 256, 256]
 
         # Encode
-        out_0 = F.relu(self.conv1(out))
-        out_1 = F.relu(self.conv2(out_0))
-        out_2 = F.relu(self.conv3(out_1))
+        out_0 = F.relu(self.conv1(out))  # [B, 64, 128, 128]
+        out_1 = F.relu(self.conv2(out_0))  # [B, 128, 64, 64]
+        out_2 = F.relu(self.conv3(out_1))  # [B, 256, 32, 32]
         out_3 = self.att(out_2)
-        out_4 = F.relu(self.conv4(out_3))
-        out_5 = F.relu(self.conv5(out_4))
-        out_6 = F.relu(self.conv6(out_5))
-        out_7 = self.res_block(out_6)
+        out_4 = F.relu(self.conv4(out_3))  # [B, 512, 16, 16]
+        out_5 = F.relu(self.conv5(out_4))  # [B, 512, 8, 8]
+        out_6 = F.relu(self.conv6(out_5))  # [B, 512, 4, 4]
+        out_7 = F.relu(self.res_block(out_6))
 
         # Vectorize
-        out = F.relu(self.pooling(out_7).view(512, 1))
+        out = self.pooling(out_7).view(-1, 512, 1)  # [B, 512, 1]
 
         # Calculate Realism Score
-        out = torch.mm(out.t(), self.W[:, i].view(-1, 1) + self.w_0) + self.b
-        # out = torch.tanh(out)
+        _out = out.transpose(1, 2)
+        _W_i = (self.W[:, i].unsqueeze(-1)).transpose(0, 1)
+        out = torch.bmm(_out, _W_i + self.w_0) + self.b
+
+        out = out.view(x.shape[0])
 
         return out, [out_0, out_1, out_2, out_3, out_4, out_5, out_6, out_7]
