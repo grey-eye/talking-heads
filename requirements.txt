@@ -1,6 +1,8 @@
-face-alignment==1.0.0
+https://download.pytorch.org/whl/cu100/torch-1.1.0-cp37-cp37m-linux_x86_64.whl
+https://download.pytorch.org/whl/cu100/torchvision-0.3.0-cp37-cp37m-linux_x86_64.whl
 torch==1.1.0
 torchvision==0.3.0
+face-alignment==1.0.0
 
 matplotlib==3.1.1
 numpy==1.16.4

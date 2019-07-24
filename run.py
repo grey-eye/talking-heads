@@ -40,7 +40,7 @@ def meta_train(gpu, dataset_path, continue_id):
 
     # DATASET-----------------------------------------------------------------------------------------------------------
     logging.info(f'Training using dataset located in {dataset_path}')
-    dataset = VoxCelebDataset(
+    raw_dataset = VoxCelebDataset(
         root=dataset_path,
         extension='.vid',
         shuffle_frames=True,
@@ -51,13 +51,13 @@ def meta_train(gpu, dataset_path, continue_id):
             transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
         ])
     )
-    dataset = DataLoader(dataset, batch_size=config.BATCH_SIZE, shuffle=True)
+    dataset = DataLoader(raw_dataset, batch_size=config.BATCH_SIZE, shuffle=True)
 
     # NETWORK ----------------------------------------------------------------------------------------------------------
 
     E = network.Embedder().type(dtype)
     G = network.Generator().type(dtype)
-    D = network.Discriminator(len(dataset)).type(dtype)
+    D = network.Discriminator(len(raw_dataset)).type(dtype)
 
     optimizer_E_G = Adam(
         params=list(E.parameters()) + list(G.parameters()),

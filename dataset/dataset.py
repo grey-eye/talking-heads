@@ -4,6 +4,7 @@ process up.
 """
 import logging
 import os
+from datetime import datetime
 import pickle as pkl
 import random
 from multiprocessing import Pool
@@ -60,8 +61,9 @@ def preprocess_dataset(source, output, device='cpu', size=0, overwrite=False):
     init_pool(fa, output)
     counter = 1
     for v in video_list:
+        start_time = datetime.now()
         process_video_folder(v)
-        logging.info(f'{counter}/{len(video_list)}')
+        logging.info(f'{counter}/{len(video_list)}\t{datetime.now()-start_time}')
         counter += 1
 
     logging.info(f'All {len(video_list)} videos processed.')
