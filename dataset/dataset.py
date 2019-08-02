@@ -215,7 +215,7 @@ def save_video(path, video_id, frames, face_alignment):
 class VoxCelebDataset(Dataset):
     """ Dataset object used to access the pre-processed VoxCelebDataset """
 
-    def __init__(self, root, extension='.vid', shuffle=False, transform=None, shuffle_frames=False):
+    def __init__(self, root, extension='.vid', shuffle=False, transform=None, shuffle_frames=False, subset_size=None):
         """
         Instantiates the Dataset.
 
@@ -234,6 +234,8 @@ class VoxCelebDataset(Dataset):
             for filename in files
             if filename.endswith(extension)
         ]
+        if subset_size is not None:
+            self.files = self.files[:subset_size]
         self.length = len(self.files)
         self.indexes = [idx for idx in range(self.length)]
 

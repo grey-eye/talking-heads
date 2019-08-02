@@ -11,20 +11,6 @@ def init_conv(conv):
         conv.bias.data.zero_()
 
 
-def adaIN(feature, mean_style, std_style, eps=1e-5):
-    B, C, H, W = feature.shape
-
-    feature = feature.view(B, C, -1)
-
-    std_feat = (torch.std(feature, dim=2) + eps).view(B, C, 1)
-    mean_feat = torch.mean(feature, dim=2).view(B, C, 1)
-
-    adain = std_style * (feature - mean_feat) / std_feat + mean_style
-
-    adain = adain.view(B, C, H, W)
-    return adain
-
-
 # region General Blocks
 
 class SelfAttention(nn.Module):
@@ -69,6 +55,25 @@ class ConvLayer(nn.Module):
         return out
 
 
+class AdaIn(nn.Module):
+    def __init__(self):
+        super(AdaIn, self).__init__()
+        self.eps = 1e-5
+
+    def forward(self, x, mean_style, std_style):
+        B, C, H, W = x.shape
+
+        feature = x.view(B, C, -1)
+
+        std_feat = (torch.std(feature, dim=2) + self.eps).view(B, C, 1)
+        mean_feat = torch.mean(feature, dim=2).view(B, C, 1)
+
+        adain = std_style * (feature - mean_feat) / std_feat + mean_style
+
+        adain = adain.view(B, C, H, W)
+        return adain
+
+
 # endregion
 
 # region Non-Adaptive Residual Blocks
@@ -104,11 +109,11 @@ class ResidualBlockDown(nn.Module):
 
 
 class ResidualBlockUp(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, upsample=None):
+    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, upsample=2):
         super(ResidualBlockUp, self).__init__()
 
         # General
-        self.upsample = upsample if upsample is None else nn.Upsample(scale_factor=upsample, mode='nearest')
+        self.upsample = nn.Upsample(scale_factor=upsample, mode='nearest')
 
         # Right Side
         self.norm_r1 = nn.InstanceNorm2d(in_channels, affine=True)
@@ -151,10 +156,23 @@ class ResidualBlock(nn.Module):
 
     def forward(self, x):
         residual = x
-        out = F.relu(self.in1(self.conv1(x)))
-        out = self.in2(self.conv2(out))
-        out = out + residual
+
+        # # Old version
+        # out = self.conv1(x)
+        # out = self.in1(out)
+        # out = F.relu(out)
+        # out = self.conv2(out)
+        # out = self.in2(out)
+
+        # New version
+        out = self.in1(x)
         out = F.relu(out)
+        out = self.conv1(out)
+        out = self.in2(out)
+        out = F.relu(out)
+        out = self.conv2(out)
+
+        out = out + residual
         return out
 
 
@@ -164,17 +182,20 @@ class ResidualBlock(nn.Module):
 
 
 class AdaptiveResidualBlockUp(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, upsample=None):
+    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, upsample=2):
         super(AdaptiveResidualBlockUp, self).__init__()
 
         self.in_channels = in_channels
         self.out_channels = out_channels
 
         # General
-        self.upsample = upsample if upsample is None else nn.Upsample(scale_factor=upsample, mode='nearest')
+        self.upsample = nn.Upsample(scale_factor=upsample, mode='nearest')
 
         # Right Side
+        self.norm_r1 = AdaIn()
         self.conv_r1 = ConvLayer(in_channels, out_channels, kernel_size, stride)
+
+        self.norm_r2 = AdaIn()
         self.conv_r2 = ConvLayer(out_channels, out_channels, kernel_size, stride)
 
         # Left Side
@@ -184,11 +205,11 @@ class AdaptiveResidualBlockUp(nn.Module):
         residual = x
 
         # Right Side
-        out = adaIN(x, mean1, std1)
+        out = self.norm_r1(x, mean1, std1)
         out = F.relu(out)
         out = self.upsample(out)
         out = self.conv_r1(out)
-        out = adaIN(out, mean2, std2)
+        out = self.norm_r2(out, mean2, std2)
         out = F.relu(out)
         out = self.conv_r2(out)
 
@@ -205,18 +226,27 @@ class AdaptiveResidualBlock(nn.Module):
     def __init__(self, channels):
         super(AdaptiveResidualBlock, self).__init__()
         self.conv1 = ConvLayer(channels, channels, kernel_size=3, stride=1)
-        self.in1 = nn.InstanceNorm2d(channels, affine=True)
+        self.in1 = AdaIn()
         self.conv2 = ConvLayer(channels, channels, kernel_size=3, stride=1)
-        self.in2 = nn.InstanceNorm2d(channels, affine=True)
+        self.in2 = AdaIn()
 
     def forward(self, x, mean1, std1, mean2, std2):
         residual = x
 
-        out = self.conv1(x)
-        out = adaIN(out, mean1, std1)
+        # # Old version
+        # out = self.conv1(x)
+        # out = self.in1(out, mean1, std1)
+        # out = F.relu(out)
+        # out = self.conv2(out)
+        # out = self.in2(out, mean1, std1)
+
+        # New version
+        out = self.in1(x, mean1, std1)
+        out = F.relu(out)
+        out = self.conv1(out)
+        out = self.in2(out, mean1, std1)
         out = F.relu(out)
         out = self.conv2(out)
-        out = adaIN(out, mean1, std1)
 
         out = out + residual
         return out

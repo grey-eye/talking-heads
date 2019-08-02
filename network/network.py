@@ -6,14 +6,17 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 from .components import ResidualBlock, AdaptiveResidualBlock, ResidualBlockDown, AdaptiveResidualBlockUp, SelfAttention
-
-E_VECTOR_LENGTH = 512
+import config
 
 
 def weights_init(m):
     classname = m.__class__.__name__
     if classname.find('Conv2d') != -1:
         m.weight.data.normal_(0.0, 0.02)
+    if classname.find('Linear') != -1:
+        # m.weight.data.normal_(0.0, 0.02)
+        nn.init.xavier_uniform_(m.weight.data)
+        m.bias.data.fill_(0)
     elif classname.find('InstanceNorm2d') != -1:
         m.weight.data.normal_(1.0, 0.02)
         m.bias.data.fill_(0)
@@ -47,16 +50,16 @@ class Embedder(nn.Module):
         out = torch.cat((x, y), dim=1)  # [BxK, 6, 256, 256]
 
         # Encode
-        out = F.relu(self.conv1(out))  # [BxK, 64, 128, 128]
-        out = F.relu(self.conv2(out))  # [BxK, 128, 64, 64]
-        out = F.relu(self.conv3(out))  # [BxK, 256, 32, 32]
+        out = (self.conv1(out))  # [BxK, 64, 128, 128]
+        out = (self.conv2(out))  # [BxK, 128, 64, 64]
+        out = (self.conv3(out))  # [BxK, 256, 32, 32]
         out = self.att(out)
-        out = F.relu(self.conv4(out))  # [BxK, 512, 16, 16]
-        out = F.relu(self.conv5(out))  # [BxK, 512, 8, 8]
-        out = F.relu(self.conv6(out))  # [BxK, 512, 4, 4]
+        out = (self.conv4(out))  # [BxK, 512, 16, 16]
+        out = (self.conv5(out))  # [BxK, 512, 8, 8]
+        out = (self.conv6(out))  # [BxK, 512, 4, 4]
 
         # Vectorize
-        out = F.relu(self.pooling(out).view(-1, E_VECTOR_LENGTH, 1))
+        out = F.relu(self.pooling(out).view(-1, config.E_VECTOR_LENGTH))
 
         return out
 
@@ -81,7 +84,11 @@ class Generator(nn.Module):
 
         # projection layer
         self.PSI_PORTIONS, self.psi_length = self.define_psi_slices()
-        self.projection = nn.Parameter(torch.rand(self.psi_length, E_VECTOR_LENGTH).normal_(0.0, 0.02))
+        self.projection = nn.Sequential(
+            nn.utils.spectral_norm(nn.Linear(config.E_VECTOR_LENGTH, config.E_VECTOR_LENGTH)),
+            nn.ReLU(),
+            nn.utils.spectral_norm(nn.Linear(config.E_VECTOR_LENGTH, self.psi_length)),
+        )
 
         # encoding layers
         self.conv1 = ResidualBlockDown(3, 64)
@@ -113,12 +120,24 @@ class Generator(nn.Module):
 
         # decoding layers
         self.deconv6 = AdaptiveResidualBlockUp(512, 512, upsample=2)
+        self.in6_d = nn.InstanceNorm2d(512, affine=True)
+
         self.deconv5 = AdaptiveResidualBlockUp(512, 512, upsample=2)
+        self.in5_d = nn.InstanceNorm2d(512, affine=True)
+
         self.deconv4 = AdaptiveResidualBlockUp(512, 256, upsample=2)
+        self.in4_d = nn.InstanceNorm2d(256, affine=True)
+
         self.deconv3 = AdaptiveResidualBlockUp(256, 128, upsample=2)
+        self.in3_d = nn.InstanceNorm2d(128, affine=True)
+
         self.att2 = SelfAttention(128)
+
         self.deconv2 = AdaptiveResidualBlockUp(128, 64, upsample=2)
+        self.in2_d = nn.InstanceNorm2d(64, affine=True)
+
         self.deconv1 = AdaptiveResidualBlockUp(64, 3, upsample=2)
+        self.in1_d = nn.InstanceNorm2d(3, affine=True)
 
         self.apply(weights_init)
 
@@ -126,18 +145,16 @@ class Generator(nn.Module):
         out = y  # [B, 3, 256, 256]
 
         # Calculate psi_hat parameters
-        P = self.projection.unsqueeze(0)
-        P = P.expand(e.shape[0], self.psi_length, E_VECTOR_LENGTH)
-        psi_hat = torch.bmm(P, e)
+        psi_hat = self.projection(e)
 
         # Encode
-        out = F.relu(self.in1_e(self.conv1(out)))  # [B, 64, 128, 128]
-        out = F.relu(self.in2_e(self.conv2(out)))  # [B, 128, 64, 64]
-        out = F.relu(self.in3_e(self.conv3(out)))  # [B, 256, 32, 32]
+        out = self.in1_e(self.conv1(out))  # [B, 64, 128, 128]
+        out = self.in2_e(self.conv2(out))  # [B, 128, 64, 64]
+        out = self.in3_e(self.conv3(out))  # [B, 256, 32, 32]
         out = self.att1(out)
-        out = F.relu(self.in4_e(self.conv4(out)))  # [B, 512, 16, 16]
-        out = F.relu(self.in5_e(self.conv5(out)))  # [B, 512, 8, 8]
-        out = F.relu(self.in6_e(self.conv6(out)))  # [B, 512, 4, 4]
+        out = self.in4_e(self.conv4(out))  # [B, 512, 16, 16]
+        out = self.in5_e(self.conv5(out))  # [B, 512, 8, 8]
+        out = self.in6_e(self.conv6(out))  # [B, 512, 4, 4]
 
         # Residual layers
         out = self.res1(out, *self.slice_psi(psi_hat, 'res1'))
@@ -147,22 +164,22 @@ class Generator(nn.Module):
         out = self.res5(out, *self.slice_psi(psi_hat, 'res5'))
 
         # Decode
-        out = F.relu(self.deconv6(out, *self.slice_psi(psi_hat, 'deconv6')))  # [B, 512, 4, 4]
-        out = F.relu(self.deconv5(out, *self.slice_psi(psi_hat, 'deconv5')))  # [B, 512, 16, 16]
-        out = F.relu(self.deconv4(out, *self.slice_psi(psi_hat, 'deconv4')))  # [B, 256, 32, 32]
-        out = F.relu(self.deconv3(out, *self.slice_psi(psi_hat, 'deconv3')))  # [B, 128, 64, 64]
+        out = self.in6_d(self.deconv6(out, *self.slice_psi(psi_hat, 'deconv6')))  # [B, 512, 4, 4]
+        out = self.in5_d(self.deconv5(out, *self.slice_psi(psi_hat, 'deconv5')))  # [B, 512, 16, 16]
+        out = self.in4_d(self.deconv4(out, *self.slice_psi(psi_hat, 'deconv4')))  # [B, 256, 32, 32]
+        out = self.in3_d(self.deconv3(out, *self.slice_psi(psi_hat, 'deconv3')))  # [B, 128, 64, 64]
         out = self.att2(out)
-        out = F.relu(self.deconv2(out, *self.slice_psi(psi_hat, 'deconv2')))  # [B, 64, 128, 128]
-        out = self.deconv1(out, *self.slice_psi(psi_hat, 'deconv1'))  # [B, 3, 256, 256]
+        out = self.in2_d(self.deconv2(out, *self.slice_psi(psi_hat, 'deconv2')))  # [B, 64, 128, 128]
+        out = self.in1_d(self.deconv1(out, *self.slice_psi(psi_hat, 'deconv1')))  # [B, 3, 256, 256]
 
-        # out = F.sigmoid(out) * 255
+        out = torch.sigmoid(out)
 
         return out
 
     def slice_psi(self, psi, portion):
         idx0, idx1 = self.PSI_PORTIONS[portion]
         len1, len2 = self.ADAIN_LAYERS[portion]
-        aux = psi[:, idx0:idx1]
+        aux = psi[:, idx0:idx1].unsqueeze(-1)
         mean1, std1 = aux[:, 0:len1], aux[:, len1:2 * len1]
         mean2, std2 = aux[:, 2 * len1:2 * len1 + len2], aux[:, 2 * len1 + len2:]
         return mean1, std1, mean2, std2
@@ -208,17 +225,17 @@ class Discriminator(nn.Module):
         out = torch.cat((x, y), dim=1)  # [B, 6, 256, 256]
 
         # Encode
-        out_0 = F.relu(self.conv1(out))  # [B, 64, 128, 128]
-        out_1 = F.relu(self.conv2(out_0))  # [B, 128, 64, 64]
-        out_2 = F.relu(self.conv3(out_1))  # [B, 256, 32, 32]
+        out_0 = (self.conv1(out))  # [B, 64, 128, 128]
+        out_1 = (self.conv2(out_0))  # [B, 128, 64, 64]
+        out_2 = (self.conv3(out_1))  # [B, 256, 32, 32]
         out_3 = self.att(out_2)
-        out_4 = F.relu(self.conv4(out_3))  # [B, 512, 16, 16]
-        out_5 = F.relu(self.conv5(out_4))  # [B, 512, 8, 8]
-        out_6 = F.relu(self.conv6(out_5))  # [B, 512, 4, 4]
-        out_7 = F.relu(self.res_block(out_6))
+        out_4 = (self.conv4(out_3))  # [B, 512, 16, 16]
+        out_5 = (self.conv5(out_4))  # [B, 512, 8, 8]
+        out_6 = (self.conv6(out_5))  # [B, 512, 4, 4]
+        out_7 = (self.res_block(out_6))
 
         # Vectorize
-        out = self.pooling(out_7).view(-1, 512, 1)  # [B, 512, 1]
+        out = F.relu(self.pooling(out_7)).view(-1, 512, 1)  # [B, 512, 1]
 
         # Calculate Realism Score
         _out = out.transpose(1, 2)

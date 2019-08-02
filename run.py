@@ -4,7 +4,6 @@ import os
 import sys
 from datetime import datetime, timedelta
 
-import numpy as np
 import torch
 from PIL import Image
 from torch.nn import DataParallel
@@ -25,6 +24,7 @@ class ParallelDiscriminator(DataParallel):
         return self.module.W
 
 
+# region Training
 def meta_train(gpu, dataset_path, continue_id):
     run_start = datetime.now()
     logging.info('===== META-TRAINING =====')
@@ -44,11 +44,11 @@ def meta_train(gpu, dataset_path, continue_id):
         root=dataset_path,
         extension='.vid',
         shuffle_frames=True,
+        # subset_size=1,
         transform=transforms.Compose([
             transforms.Resize(config.IMAGE_SIZE),
             transforms.CenterCrop(config.IMAGE_SIZE),
             transforms.ToTensor(),
-            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
         ])
     )
     dataset = DataLoader(raw_dataset, batch_size=config.BATCH_SIZE, shuffle=True)
@@ -109,7 +109,7 @@ def meta_train(gpu, dataset_path, continue_id):
             # Calculate average encoding vector for video
             e_in = video.reshape(dims[0] * dims[1], dims[2], dims[3], dims[4], dims[5])  # [BxK, 2, C, W, H]
             x, y = e_in[:, 0, ...], e_in[:, 1, ...]
-            e_vectors = E(x, y).reshape(dims[0], dims[1], -1, 1)  # B, K, len(e), 1
+            e_vectors = E(x, y).reshape(dims[0], dims[1], -1)  # B, K, len(e)
             e_hat = e_vectors.mean(dim=1)
 
             # Generate frame using landmarks from frame t
@@ -123,7 +123,7 @@ def meta_train(gpu, dataset_path, continue_id):
             optimizer_E_G.zero_grad()
             optimizer_D.zero_grad()
 
-            loss_E_G = criterion_E_G(x_t, x_hat, r_x_hat, e_hat, D.W[:, i], D_act, D_act_hat).mean()
+            loss_E_G = criterion_E_G(x_t, x_hat, r_x_hat, e_hat, D.W[:, i].transpose(1, 0), D_act, D_act_hat).mean()
             loss_D = criterion_D(r_x, r_x_hat).mean()
             loss = loss_E_G + loss_D
             loss.backward()
@@ -142,27 +142,28 @@ def meta_train(gpu, dataset_path, continue_id):
             optimizer_D.step()
 
             batch_end = datetime.now()
-            batch_durations.append(batch_end - batch_start)
+            batch_duration = batch_end - batch_start
+            batch_durations.append(batch_duration)
             # SHOW PROGRESS --------------------------------------------------------------------------------------------
             if (batch_num + 1) % 1 == 0 or batch_num == 0:
-                avg_time = sum(batch_durations, timedelta(0)) / len(batch_durations)
                 logging.info(f'Epoch {epoch + 1}: [{batch_num + 1}/{len(dataset)}] | '
-                             f'Avg Time: {avg_time} | '
+                             f'Time: {batch_duration} | '
                              f'Loss_E_G = {loss_E_G.item():.4} Loss_D {loss_D.item():.4}')
                 logging.debug(f'D(x) = {r_x.mean().item():.4} D(x_hat) = {r_x_hat.mean().item():.4}')
 
             # SAVE IMAGES ----------------------------------------------------------------------------------------------
-            if (batch_num + 1) % 1 == 0:
-                if not os.path.isdir(config.GENERATED_DIR):
-                    os.makedirs(config.GENERATED_DIR)
+            save_image(os.path.join(config.GENERATED_DIR, f'last_result_x.png'), x_t[0])
+            save_image(os.path.join(config.GENERATED_DIR, f'last_result_x_hat.png'), x_hat[0])
 
+            if (batch_num + 1) % 1000 == 0:
                 save_image(os.path.join(config.GENERATED_DIR, f'{datetime.now():%Y%m%d_%H%M%S%f}_x.png'), x_t[0])
                 save_image(os.path.join(config.GENERATED_DIR, f'{datetime.now():%Y%m%d_%H%M%S%f}_x_hat.png'), x_hat[0])
 
+            # SAVE MODELS ----------------------------------------------------------------------------------------------
             if (batch_num + 1) % 100 == 0:
-                save_model(E, 'Embedder', gpu)
-                save_model(G, 'Generator', gpu)
-                save_model(D, 'Discriminator', gpu)
+                save_model(E, 'Embedder', gpu, run_start)
+                save_model(G, 'Generator', gpu, run_start)
+                save_model(D, 'Discriminator', gpu, run_start)
 
         # SAVE MODELS --------------------------------------------------------------------------------------------------
 
@@ -174,6 +175,9 @@ def meta_train(gpu, dataset_path, continue_id):
                      f'Average batch time: {sum(batch_durations, timedelta(0)) / len(batch_durations)}')
 
 
+# endregion
+
+# region Model Manipulation
 def save_model(model, name, gpu, time_for_name=None):
     if time_for_name is None:
         time_for_name = datetime.now()
@@ -210,27 +214,27 @@ def load_model(model, name, continue_id):
     return model
 
 
-def save_image(filename, data):
-    data = data.clone().detach().cpu()
+# endregion
 
-    std = np.array([0.229, 0.224, 0.225]).reshape((3, 1, 1))
-    mean = np.array([0.485, 0.456, 0.406]).reshape((3, 1, 1))
-    img = data.numpy()
-    img = ((img * std + mean).transpose(1, 2, 0) * 255.0).clip(0, 255).astype("uint8")
+# region Image Manipulation
+def save_image(filename, data):
+    if not os.path.isdir(config.GENERATED_DIR):
+        os.makedirs(config.GENERATED_DIR)
+
+    data = data.clone().detach().cpu()
+    img = (data.numpy().transpose(1, 2, 0) * 255.0).clip(0, 255).astype("uint8")
     img = Image.fromarray(img)
     img.save(filename)
 
 
 def imshow(data):
     data = data.clone().detach().cpu()
-
-    std = np.array([0.229, 0.224, 0.225]).reshape((3, 1, 1))
-    mean = np.array([0.485, 0.456, 0.406]).reshape((3, 1, 1))
-    img = data.numpy()
-    img = ((img * std + mean).transpose(1, 2, 0) * 255.0).clip(0, 255).astype("uint8")
+    img = (data.numpy().transpose(1, 2, 0) * 255.0).clip(0, 255).astype("uint8")
     plt.imshow(img)
     plt.show()
 
+
+# endregion
 
 def main():
     # ARGUMENTS --------------------------------------------------------------------------------------------------------
