@@ -22,8 +22,8 @@ class LossEG(nn.Module):
         self.match_loss = not feed_forward
 
     def loss_cnt(self, x, x_hat):
-        IMG_NET_MEAN = torch.Tensor([0.485, 0.456, 0.406]).reshape([1, 3, 1, 1])
-        IMG_NET_STD = torch.Tensor([0.229, 0.224, 0.225]).reshape([1, 3, 1, 1])
+        IMG_NET_MEAN = torch.Tensor([0.485, 0.456, 0.406]).reshape([1, 3, 1, 1]).to(x.device)
+        IMG_NET_STD = torch.Tensor([0.229, 0.224, 0.225]).reshape([1, 3, 1, 1]).to(x.device)
 
         x = (x - IMG_NET_MEAN) / IMG_NET_STD
         x_hat = (x_hat - IMG_NET_MEAN) / IMG_NET_STD
@@ -46,26 +46,18 @@ class LossEG(nn.Module):
 
         return vgg19_loss * config.LOSS_VGG19_WEIGHT + vgg_face_loss * config.LOSS_VGG_FACE_WEIGHT
 
-    def loss_adv(self, r_x_hat, d_act, d_act_hat):
-        return -r_x_hat.mean() + self.loss_fm(d_act, d_act_hat)
-
-    def loss_fm(self, d_act, d_act_hat):
-        loss = 0
-        for i in range(0, len(d_act)):
-            loss += F.l1_loss(d_act[i], d_act_hat[i])
-
-        return loss
+    def loss_adv(self, r_x_hat):
+        return -r_x_hat.mean()
 
     def loss_mch(self, e_hat, W_i):
-        return F.l1_loss(W_i.view(-1), e_hat.view(-1)) * config.LOSS_MCH_WEIGHT
+        return F.l1_loss(W_i.reshape(-1), e_hat.reshape(-1)) * config.LOSS_MCH_WEIGHT
 
-    def forward(self, x, x_hat, r_x_hat, e_hat, W_i, d_act, d_act_hat):
+    def forward(self, x, x_hat, r_x_hat, e_hat, W_i):
         cnt = self.loss_cnt(x, x_hat)
-        adv = self.loss_adv(r_x_hat, d_act, d_act_hat)
-        mch = self.loss_mch(e_hat, W_i) if self.match_loss else 0
+        adv = self.loss_adv(r_x_hat)
+        mch = self.loss_mch(e_hat, W_i).to(adv.device) if self.match_loss else 0
 
-        return (cnt + adv + mch).view(1)
-        # return cnt.view(1), adv.view(1)
+        return (cnt + adv + mch).reshape(1)
 
 
 class LossD(nn.Module):
@@ -73,4 +65,4 @@ class LossD(nn.Module):
         super(LossD, self).__init__()
 
     def forward(self, r_x, r_x_hat):
-        return (F.relu(1 + r_x_hat) + F.relu(1 - r_x)).mean().view(1)
+        return (F.relu(1 + r_x_hat) + F.relu(1 - r_x)).mean().reshape(1)

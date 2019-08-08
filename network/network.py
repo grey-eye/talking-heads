@@ -79,16 +79,20 @@ class Generator(nn.Module):
         ('deconv1', (64, 3))
     ])
 
-    def __init__(self):
+    def __init__(self, use_mlp=False):
         super(Generator, self).__init__()
+        self.use_mlp = use_mlp
 
         # projection layer
         self.PSI_PORTIONS, self.psi_length = self.define_psi_slices()
-        self.projection = nn.Sequential(
-            nn.utils.spectral_norm(nn.Linear(config.E_VECTOR_LENGTH, config.E_VECTOR_LENGTH)),
-            nn.ReLU(),
-            nn.utils.spectral_norm(nn.Linear(config.E_VECTOR_LENGTH, self.psi_length)),
-        )
+        if use_mlp:
+            self.projection = nn.Sequential(
+                nn.utils.spectral_norm(nn.Linear(config.E_VECTOR_LENGTH, config.E_VECTOR_LENGTH)),
+                nn.ReLU(),
+                nn.utils.spectral_norm(nn.Linear(config.E_VECTOR_LENGTH, self.psi_length)),
+            )
+        else:
+            self.projection = nn.Parameter(torch.rand(self.psi_length, config.E_VECTOR_LENGTH).normal_(0.0, 0.02))
 
         # encoding layers
         self.conv1 = ResidualBlockDown(3, 64)
@@ -145,7 +149,12 @@ class Generator(nn.Module):
         out = y  # [B, 3, 256, 256]
 
         # Calculate psi_hat parameters
-        psi_hat = self.projection(e)
+        if self.use_mlp:
+            psi_hat = self.projection(e)
+        else:
+            P = self.projection.unsqueeze(0)
+            P = P.expand(e.shape[0], P.shape[1], P.shape[2])
+            psi_hat = torch.bmm(P, e.unsqueeze(2)).squeeze(2)
 
         # Encode
         out = self.in1_e(self.conv1(out))  # [B, 64, 128, 128]
@@ -241,7 +250,8 @@ class Discriminator(nn.Module):
         _out = out.transpose(1, 2)
         _W_i = (self.W[:, i].unsqueeze(-1)).transpose(0, 1)
         out = torch.bmm(_out, _W_i + self.w_0) + self.b
+        out = torch.sigmoid(out)
 
-        out = out.view(x.shape[0])
+        out = out.reshape(x.shape[0])
 
         return out, [out_0, out_1, out_2, out_3, out_4, out_5, out_6, out_7]

@@ -2,7 +2,7 @@ import argparse
 import logging
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import torch
 from PIL import Image
@@ -17,6 +17,14 @@ from dataset import preprocess_dataset, VoxCelebDataset
 
 import matplotlib.pyplot as plt
 
+GPU_DISTRIBUTION = {
+    'Embedder': 1,
+    'Generator': 0,
+    'Discriminator': 0,
+    'LossEG': 0,
+    'LossD': 1,
+}
+
 
 class ParallelDiscriminator(DataParallel):
     @property
@@ -28,23 +36,26 @@ class ParallelDiscriminator(DataParallel):
 def meta_train(gpu, dataset_path, continue_id):
     run_start = datetime.now()
     logging.info('===== META-TRAINING =====')
-    # GPU / CPU --------------------------------------------------------------------------------------------------------
+
+    # region GPU / CPU -------------------------------------------------------------------------------------------------
     if gpu:
         dtype = torch.cuda.FloatTensor
         torch.set_default_tensor_type(dtype)
-        logging.info(f'Running on GPU: {torch.cuda.current_device()}.')
+        logging.info(f'Running on GPU.')
     else:
         dtype = torch.FloatTensor
         torch.set_default_tensor_type(dtype)
         logging.info(f'Running on CPU.')
 
-    # DATASET-----------------------------------------------------------------------------------------------------------
+    # endregion
+
+    # region DATASET----------------------------------------------------------------------------------------------------
     logging.info(f'Training using dataset located in {dataset_path}')
     raw_dataset = VoxCelebDataset(
         root=dataset_path,
         extension='.vid',
         shuffle_frames=True,
-        # subset_size=1,
+        subset_size=config.SUBSET_SIZE,
         transform=transforms.Compose([
             transforms.Resize(config.IMAGE_SIZE),
             transforms.CenterCrop(config.IMAGE_SIZE),
@@ -53,7 +64,9 @@ def meta_train(gpu, dataset_path, continue_id):
     )
     dataset = DataLoader(raw_dataset, batch_size=config.BATCH_SIZE, shuffle=True)
 
-    # NETWORK ----------------------------------------------------------------------------------------------------------
+    # endregion
+
+    # region NETWORK ---------------------------------------------------------------------------------------------------
 
     E = network.Embedder().type(dtype)
     G = network.Generator().type(dtype)
@@ -68,62 +81,76 @@ def meta_train(gpu, dataset_path, continue_id):
         lr=config.LEARNING_RATE_D
     )
 
-    criterion_E_G = network.LossEG(feed_forward=True)
+    criterion_E_G = network.LossEG(config.FEED_FORWARD)
     criterion_D = network.LossD()
 
-    if gpu:
-        E = DataParallel(E)
-        G = DataParallel(G)
-        D = ParallelDiscriminator(D)
-        criterion_E_G = DataParallel(criterion_E_G)
-        criterion_D = DataParallel(criterion_D)
-
     if continue_id is not None:
-        E = load_model(E, 'Embedder', continue_id)
-        G = load_model(G, 'Generator', continue_id)
-        D = load_model(D, 'Discriminator', continue_id)
+        E = load_model(E, continue_id)
+        G = load_model(G, continue_id)
+        D = load_model(D, continue_id)
 
-    # TRAINING LOOP ----------------------------------------------------------------------------------------------------
-    logging.info(f'Starting training loop. '
-                 f'Epochs: {config.EPOCHS} '
-                 f'Batches: {len(dataset)} '
-                 f'Batch Size: {config.BATCH_SIZE}')
+    if gpu:
+        E.cuda(GPU_DISTRIBUTION['Embedder'])
+        G.cuda(GPU_DISTRIBUTION['Generator'])
+        D.cuda(GPU_DISTRIBUTION['Discriminator'])
+        criterion_E_G.cuda(GPU_DISTRIBUTION['LossEG'])
+        criterion_D.cuda(GPU_DISTRIBUTION['LossD'])
+
+    # endregion
+
+    # region TRAINING LOOP ---------------------------------------------------------------------------------------------
+    logging.info(f'Epochs: {config.EPOCHS} Batches: {len(dataset)} Batch Size: {config.BATCH_SIZE}')
 
     for epoch in range(config.EPOCHS):
         epoch_start = datetime.now()
-        batch_durations = []
 
         E.train()
         G.train()
         D.train()
 
         for batch_num, (i, video) in enumerate(dataset):
+
+            # region PROCESS BATCH -------------------------------------------------------------------------------------
+
             batch_start = datetime.now()
             video = video.type(dtype)  # [B, K+1, 2, C, W, H]
 
             # Put one frame aside (frame t)
             t = video[:, -1, ...]  # [B, 2, C, W, H]
-            video = video[:, :-1, ...]  # [B, K, C, W, H]
+            video = video[:, :-1, ...]  # [B, K, 2, C, W, H]
             dims = video.shape
 
             # Calculate average encoding vector for video
             e_in = video.reshape(dims[0] * dims[1], dims[2], dims[3], dims[4], dims[5])  # [BxK, 2, C, W, H]
             x, y = e_in[:, 0, ...], e_in[:, 1, ...]
+            if gpu:
+                x, y = x.cuda(1), y.cuda(1)
             e_vectors = E(x, y).reshape(dims[0], dims[1], -1)  # B, K, len(e)
             e_hat = e_vectors.mean(dim=1)
+            if gpu:
+                e_hat = e_hat.cuda(0)
 
             # Generate frame using landmarks from frame t
             x_t, y_t = t[:, 0, ...], t[:, 1, ...]
             x_hat = G(y_t, e_hat)
 
             # Optimize E_G and D
-            r_x_hat, D_act_hat = D(x_hat, y_t, i)
-            r_x, D_act = D(x_t, y_t, i)
+            r_x_hat, _ = D(x_hat, y_t, i)
+            r_x, _ = D(x_t, y_t, i)
 
             optimizer_E_G.zero_grad()
             optimizer_D.zero_grad()
 
-            loss_E_G = criterion_E_G(x_t, x_hat, r_x_hat, e_hat, D.W[:, i].transpose(1, 0), D_act, D_act_hat).mean()
+            # if gpu:
+            #     x_t = x_t.cuda(1)
+            #     x_hat = x_hat.cuda(1)
+            #     r_x = r_x.cuda(1)
+            #     r_x_hat = r_x_hat.cuda(1)
+
+            loss_E_G = criterion_E_G(x_t, x_hat, r_x_hat, e_hat, D.W[:, i].transpose(1, 0)).mean()
+            if gpu:
+                r_x, r_x_hat = r_x.cuda(1), r_x_hat.cuda(1)
+                loss_E_G = loss_E_G.cuda(1)
             loss_D = criterion_D(r_x, r_x_hat).mean()
             loss = loss_E_G + loss_D
             loss.backward()
@@ -132,9 +159,13 @@ def meta_train(gpu, dataset_path, continue_id):
             optimizer_D.step()
 
             # Optimize D again
+            # if gpu:
+            #     y_t, x_t = y_t.cuda(0), x_t.cuda(0)
             x_hat = G(y_t, e_hat).detach()
             r_x_hat, D_act_hat = D(x_hat, y_t, i)
             r_x, D_act = D(x_t, y_t, i)
+            if gpu:
+                r_x, r_x_hat = r_x.cuda(1), r_x_hat.cuda(1)
 
             optimizer_D.zero_grad()
             loss_D = criterion_D(r_x, r_x_hat).mean()
@@ -142,75 +173,75 @@ def meta_train(gpu, dataset_path, continue_id):
             optimizer_D.step()
 
             batch_end = datetime.now()
-            batch_duration = batch_end - batch_start
-            batch_durations.append(batch_duration)
-            # SHOW PROGRESS --------------------------------------------------------------------------------------------
+
+            # endregion
+
+            # region SHOW PROGRESS -------------------------------------------------------------------------------------
             if (batch_num + 1) % 1 == 0 or batch_num == 0:
                 logging.info(f'Epoch {epoch + 1}: [{batch_num + 1}/{len(dataset)}] | '
-                             f'Time: {batch_duration} | '
-                             f'Loss_E_G = {loss_E_G.item():.4} Loss_D {loss_D.item():.4}')
-                logging.debug(f'D(x) = {r_x.mean().item():.4} D(x_hat) = {r_x_hat.mean().item():.4}')
+                             f'Time: {batch_end - batch_start} | '
+                             f'Loss_E_G = {loss_E_G.item():.4f} Loss_D = {loss_D.item():.4f}')
+                logging.debug(f'D(x) = {r_x.mean().item():.4f} D(x_hat) = {r_x_hat.mean().item():.4f}')
+            # endregion
 
-            # SAVE IMAGES ----------------------------------------------------------------------------------------------
+            # region SAVE ----------------------------------------------------------------------------------------------
             save_image(os.path.join(config.GENERATED_DIR, f'last_result_x.png'), x_t[0])
             save_image(os.path.join(config.GENERATED_DIR, f'last_result_x_hat.png'), x_hat[0])
 
-            if (batch_num + 1) % 1000 == 0:
+            if (batch_num + 1) % 100 == 0:
                 save_image(os.path.join(config.GENERATED_DIR, f'{datetime.now():%Y%m%d_%H%M%S%f}_x.png'), x_t[0])
                 save_image(os.path.join(config.GENERATED_DIR, f'{datetime.now():%Y%m%d_%H%M%S%f}_x_hat.png'), x_hat[0])
 
-            # SAVE MODELS ----------------------------------------------------------------------------------------------
             if (batch_num + 1) % 100 == 0:
-                save_model(E, 'Embedder', gpu, run_start)
-                save_model(G, 'Generator', gpu, run_start)
-                save_model(D, 'Discriminator', gpu, run_start)
+                save_model(E, gpu, run_start)
+                save_model(G, gpu, run_start)
+                save_model(D, gpu, run_start)
+
+            # endregion
 
         # SAVE MODELS --------------------------------------------------------------------------------------------------
 
-        save_model(E, 'Embedder', gpu, run_start)
-        save_model(G, 'Generator', gpu, run_start)
-        save_model(D, 'Discriminator', gpu, run_start)
+        save_model(E, gpu, run_start)
+        save_model(G, gpu, run_start)
+        save_model(D, gpu, run_start)
         epoch_end = datetime.now()
-        logging.info(f'Epoch {epoch + 1} finished in {epoch_end - epoch_start}. '
-                     f'Average batch time: {sum(batch_durations, timedelta(0)) / len(batch_durations)}')
+        logging.info(f'Epoch {epoch + 1} finished in {epoch_end - epoch_start}. ')
+
+    # endregion
 
 
 # endregion
 
 # region Model Manipulation
-def save_model(model, name, gpu, time_for_name=None):
+def save_model(model, gpu, time_for_name=None):
     if time_for_name is None:
         time_for_name = datetime.now()
 
-    model.eval()
+    m = model.module if isinstance(model, DataParallel) else model
 
+    m.eval()
     if gpu:
-        model.cpu()
+        m.cpu()
 
     if not os.path.exists(config.MODELS_DIR):
         os.makedirs(config.MODELS_DIR)
-
-    filename = f'{name}_{time_for_name:%Y%m%d_%H%M}.pth'
+    filename = f'{type(m).__name__}_{time_for_name:%Y%m%d_%H%M}.pth'
     torch.save(
-        model.state_dict(),
+        m.state_dict(),
         os.path.join(config.MODELS_DIR, filename)
     )
 
     if gpu:
-        model.cuda()
+        m.cuda(GPU_DISTRIBUTION[type(m).__name__])
+    m.train()
 
     logging.info(f'Model saved: {filename}')
 
-    model.train()
 
-
-def load_model(model, name, continue_id):
-    filename = f'{name}_{continue_id}.pth'
-    model.load_state_dict(
-        torch.load(
-            os.path.join(config.MODELS_DIR, filename)
-        )
-    )
+def load_model(model, continue_id):
+    filename = f'{type(model).__name__}_{continue_id}.pth'
+    state_dict = torch.load(os.path.join(config.MODELS_DIR, filename))
+    model.load_state_dict(state_dict)
     return model
 
 
@@ -271,7 +302,7 @@ def main():
     if not os.path.isdir(config.LOG_DIR):
         os.makedirs(config.LOG_DIR)
     logging.basicConfig(
-        level=logging.DEBUG,
+        level=logging.INFO,
         filename=os.path.join(config.LOG_DIR, f'{datetime.now():%Y%m%d}.log'),
         format='[%(asctime)s][%(levelname)s] %(message)s',
         datefmt='%H:%M:%S'
