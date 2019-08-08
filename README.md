@@ -3,7 +3,11 @@
 ## Description
 This project is a PyTorch implementation of [Few-Shot Adversarial Learning of Realistic Neural Talking Head Models](https://arxiv.org/pdf/1905.08233.pdf). In this paper, a GAN has been designed and trained to generate realistic talking head models from a only a few head-shots (potentially just one) and the face landmarks to reproduce.
 
-The paper explains the architecture of the model, but a lot of details are missing, and no official implementations or trained models have been released. Therefore, we are trying to recreate the model as best as we can, and to explain the missing details here. __**We need your help in order to finish this, please, contribute!**__
+The paper explains the architecture of the model, but a lot of details are missing, and no official implementations or trained models have been released. 
+
+Currently, only the meta training process is implemented and working perfectly. The fine-tuning process will be coming soon!
+
+*Thanks to the community for helping to get this model working!*
 
 ## More implementation details
 **Read the original paper before you continue reading**
@@ -51,29 +55,36 @@ In `network.components`, we implemented these residual modules, based on the imp
 
 There's no information in the paper about how they initialized the different weights of the networks, so we just decided on normal distributions with std 0.2.
 
+The pictures form the dataset originally have a resolution of 224x224, but the paper always refer to the resolutions as powers of 2 (4x4, 32x32... etc.), so we decided to scale up the images to 256x256.
+
 #### Embedder
 The Embedder is the simplest network of the three: it is for the greatest part just the encoder component of the previously mentioned StyleTransfer architecture. The changes are few:
-* Since the Embedder needs to take two inputs: a head-shot and it's landmark, we had to find a way to combine them into one. In the paper it doesn't say anything besides that they "concatenate" them, so it's not clear which approach they took. We considered merging the two images by overlapping the landmarks over the head-shot and concatenating both images on the channel dimension, and ended up choosing the latter approach. Therefore, the Embedder starts by generating a [6, 224, 224] tensor by merging the two 3 channel images.
+* Since the Embedder needs to take two inputs: a head-shot and it's landmark, we had to find a way to combine them into one. In the paper it doesn't say anything besides that they "concatenate" them, so it's not clear which approach they took. We considered merging the two images by overlapping the landmarks over the head-shot and concatenating both images on the channel dimension, and ended up choosing the latter approach. Therefore, the Embedder starts by generating a [6, 256, 256] tensor by merging the two 3 channel images.
 * This also means that the first Downsample layer will take 6 layers as the input instead of 3.
-* In the paper they say that they "set the minimum number of channels in convolutional layers to 64 and the maximum [...] to 512". So we added another downsample layer so that the first one would output 64 channels and the last one 512, while increasing the number by a factor of 2 after each downsampling.
-* In the paper they explain that they inserted a self-attention layer at 32x32 spatial resolution in the downsampling sections. The pictures are of size 224x224, so there's no 32x32 resolution, but before the last downsampling, the pictures will be of size 28x28 which is close to 32x32, so we decided to insert this layer there.
+* In the paper they say that they "set the minimum number of channels in convolutional layers to 64 and the maximum [...] to 512". So we added another downsample layer so that the first one would output 64 channels and the last one 512, while increasing the number by a factor of 2 after each downsampling. They also mention that the smallest resolution they use is 4x4, so we added two more downsample layers which don't add any channels.
+* In the paper they explain that they inserted a self-attention layer at 32x32 spatial resolution in the downsampling sections. 
 * An adaptive max pool layer followed by a ReLU is added at the end in order to perform the "global max pooling" that they mention in the paper.
-* We assumed that the Instance Normalization layers were not necessary in this network, but we might be wrong.
+* We found out that the Instance Normalization layers are not necessary in this network, although the authors don't mention anything about it.
 
 #### Generator
 The generator is a more complex network, and there's a lot of details not explained in the paper.
 
-The paper explains that the network uses AdaIN layers, but not exactly where. It does say that the downsampling blocks use regular IN layers, so we kept those there, but were unsure about the placement of the AdaIN ones: should they simply replace the IN layers in the upsampling blocks, should they also be used in the middle residual blocks, or should the only be used in the residual blocks and regular IN layers in the upsampling blocks as well? We finally decided to go for the first option, but without much confidence in this choice, since the input of the AdaIN layers isn't clear either.
+The paper talks about the use of AdaIN layers, although it's not very clear where they are supposed to be placed. Eventually we understood that they're supposed to replace the BatchNormalization layers *inside the Residual Blocks*, both the regular ones and the upsampling ones. So we made two implementations of these blocks, one using regular instance normalization and one using adaptive normalization.
 
-These normalization layers are supposed to take values from the projected vector psi as input (aside from the output of the previous layer). This projected vector is created by multiplying the embedded vector provided by the Embedder network by a learnable matrix P. However, it is unclear which shape P or psi must have.
+These normalization layers are supposed to take values from the projected vector psi as input (aside from the output of the previous layer). This projected vector is created by multiplying the embedded vector provided by the Embedder network by a learnable matrix P. However, it is unclear which shape P or psi must have. 
+The final shape for psi that we decided on was a vector that would have a length equal to:
+* 2 for each "in" channel of each residual layer (one for mean and one for the std of the first AdaIN layer)
+* 2 for each "out" channel of each residual layer (one for mean and one for the std of the second AdaIN layer)
 
-Since we placed an AdaIn layer between each upsampling layer, each one of them requires a different shape of input, ranging from [1, 128, ?, ?] to [1, 3, ?, ?]. The approach that we finally took, was to project a one dimensional vector long enough to contain enough unique values for all components of these layers, and then slicing the corresponding portion of it depending on which AdaIN layer it is, and then fold it into the required shape. We are still not sure this is the intended approach, and it doesn't seem like we're using AdaIN layers correctly.
+As for P, in the paper they name it MLP in a figure, but nowhere else do they mention it being a fully connected layer. In the end, we found out that P works best being a matrix of size [len(psi), 512].
 
+For each Adaptive Residual Layer, we slice the corresponding section of psi to create the parameters for the AdaIN layers inside them.
 
 #### Discriminator
 The Discriminator is very similar to the Embedder network, with a few differences:
-* Before the global max pooling layer, the paper wants to add "an additional residual block [...] which operates at 4×4 spatial resolution". It is unclear which kind of residual block the mean, and why it operates at 4x4, since at that point we're still at 14x14. It could mean that they placed another downsample block that would go from 14x14 to 7x7, but if we're considering a resolution that is a power of 2, that still would mean that they would be operating at a resolution of 8x8. We could force a downsampling from 14x14 directly to 4x4 by tweaking the kernel and stride of the convolution, but we're not sure that's what they meant. So in this case, we simply added another regular residual layer that doesn't change the size of the channels of the tensor.
-* In the end, the reality score is calculated by multiplying the discriminator vector by the corresponding column of the learnable W matrix. This operation still doesn't give great results, and the Discriminator returns only ones.
+* An extra regular residual block is added at the end of the decoder,
+* In the end, the reality score is calculated by multiplying the discriminator vector by the corresponding column of the learnable W matrix. 
+* A sigmoid function is placed at the end to keep the reality score in the range [0, 1]
 
 ### Loss functions
 
@@ -87,10 +98,10 @@ At this point we have access to both networks' structure and weights, but we sti
 #### Loss ADV
 The adversary component of the loss function has two components:
  * The realism score produced by the Discriminator when fed a generated image, which needs to be maximized. 
- * The Feature Matching loss as proposed in [High-Resolution Image Synthesis and Semantic Manipulation with Conditional GANs](https://arxiv.org/pdf/1711.11585v2.pdf).
+ * The Feature Matching loss as proposed in [High-Resolution Image Synthesis and Semantic Manipulation with Conditional GANs](https://arxiv.org/pdf/1711.11585v2.pdf). This loss doesn't really make a difference in the end, so we eventually removed it.
 
 #### Loss MCH
-This matching loss is supposed to encourage the columns of the W matrix in the Discriminator to resemble the encodings of the Embedder network. In their experiments, they found that they could still produce good results (especially for one shot talking head models) when not using this component, although by ignoring it, it's not possible to perform fine-tuning. So for now, we've also ignored it, but it's implemented.
+This matching loss is supposed to encourage the columns of the W matrix in the Discriminator to resemble the encodings of the Embedder network. In their experiments, they found that they could still produce good results (especially for one shot talking head models) when not using this component, although by ignoring it, it's not possible to perform fine-tuning. 
 
 #### Loss D
-The loss of the Discriminator simply compares the realism score produced when fed a real image, with the generated image using the same landmarks. Since our Discriminator isn't working properly, this loss doesn't change at all for now.
+The loss of the Discriminator is a hinge loss that compares the realism score produced when fed a real image, with the generated image using the same landmarks. 
