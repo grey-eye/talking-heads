@@ -27,7 +27,7 @@ class Embedder(nn.Module):
     The Embedder network attempts to generate a vector that encodes the personal characteristics of an individual given
     a head-shot and the matching landmarks.
     """
-    def __init__(self):
+    def __init__(self, gpu=None):
         super(Embedder, self).__init__()
 
         self.conv1 = ResidualBlockDown(6, 64)
@@ -41,10 +41,16 @@ class Embedder(nn.Module):
         self.pooling = nn.AdaptiveMaxPool2d((1, 1))
 
         self.apply(weights_init)
+        self.gpu = gpu
+        if gpu is not None:
+            self.cuda(gpu)
 
     def forward(self, x, y):
         assert x.dim() == 4 and x.shape[1] == 3, "Both x and y must be tensors with shape [BxK, 3, W, H]."
         assert x.shape == y.shape, "Both x and y must be tensors with shape [BxK, 3, W, H]."
+        if self.gpu is not None:
+            x = x.cuda(self.gpu)
+            y = y.cuda(self.gpu)
 
         # Concatenate x & y
         out = torch.cat((x, y), dim=1)  # [BxK, 6, 256, 256]
@@ -79,20 +85,12 @@ class Generator(nn.Module):
         ('deconv1', (64, 3))
     ])
 
-    def __init__(self, use_mlp=False):
+    def __init__(self, gpu=None):
         super(Generator, self).__init__()
-        self.use_mlp = use_mlp
 
         # projection layer
         self.PSI_PORTIONS, self.psi_length = self.define_psi_slices()
-        if use_mlp:
-            self.projection = nn.Sequential(
-                nn.utils.spectral_norm(nn.Linear(config.E_VECTOR_LENGTH, config.E_VECTOR_LENGTH)),
-                nn.ReLU(),
-                nn.utils.spectral_norm(nn.Linear(config.E_VECTOR_LENGTH, self.psi_length)),
-            )
-        else:
-            self.projection = nn.Parameter(torch.rand(self.psi_length, config.E_VECTOR_LENGTH).normal_(0.0, 0.02))
+        self.projection = nn.Parameter(torch.rand(self.psi_length, config.E_VECTOR_LENGTH).normal_(0.0, 0.02))
 
         # encoding layers
         self.conv1 = ResidualBlockDown(3, 64)
@@ -144,17 +142,21 @@ class Generator(nn.Module):
         self.in1_d = nn.InstanceNorm2d(3, affine=True)
 
         self.apply(weights_init)
+        self.gpu = gpu
+        if gpu is not None:
+            self.cuda(gpu)
 
     def forward(self, y, e):
+        if self.gpu is not None:
+            e = e.cuda(self.gpu)
+            y = y.cuda(self.gpu)
+
         out = y  # [B, 3, 256, 256]
 
         # Calculate psi_hat parameters
-        if self.use_mlp:
-            psi_hat = self.projection(e)
-        else:
-            P = self.projection.unsqueeze(0)
-            P = P.expand(e.shape[0], P.shape[1], P.shape[2])
-            psi_hat = torch.bmm(P, e.unsqueeze(2)).squeeze(2)
+        P = self.projection.unsqueeze(0)
+        P = P.expand(e.shape[0], P.shape[1], P.shape[2])
+        psi_hat = torch.bmm(P, e.unsqueeze(2)).squeeze(2)
 
         # Encode
         out = self.in1_e(self.conv1(out))  # [B, 64, 128, 128]
@@ -206,7 +208,7 @@ class Generator(nn.Module):
 
 
 class Discriminator(nn.Module):
-    def __init__(self, training_videos):
+    def __init__(self, training_videos, gpu=None):
         super(Discriminator, self).__init__()
 
         self.conv1 = ResidualBlockDown(6, 64)
@@ -225,10 +227,17 @@ class Discriminator(nn.Module):
         self.b = nn.Parameter(torch.rand(1).normal_(0.0, 0.02))
 
         self.apply(weights_init)
+        self.gpu = gpu
+        if gpu is not None:
+            self.cuda(gpu)
 
     def forward(self, x, y, i):
         assert x.dim() == 4 and x.shape[1] == 3, "Both x and y must be tensors with shape [BxK, 3, W, H]."
         assert x.shape == y.shape, "Both x and y must be tensors with shape [BxK, 3, W, H]."
+
+        if self.gpu is not None:
+            x = x.cuda(self.gpu)
+            y = y.cuda(self.gpu)
 
         # Concatenate x & y
         out = torch.cat((x, y), dim=1)  # [B, 6, 256, 256]

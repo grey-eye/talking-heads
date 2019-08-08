@@ -157,20 +157,11 @@ class ResidualBlock(nn.Module):
     def forward(self, x):
         residual = x
 
-        # Old version
         out = self.conv1(x)
         out = self.in1(out)
         out = F.relu(out)
         out = self.conv2(out)
         out = self.in2(out)
-
-        # # New version
-        # out = self.in1(x)
-        # out = F.relu(out)
-        # out = self.conv1(out)
-        # out = self.in2(out)
-        # out = F.relu(out)
-        # out = self.conv2(out)
 
         out = out + residual
         return out
@@ -233,20 +224,11 @@ class AdaptiveResidualBlock(nn.Module):
     def forward(self, x, mean1, std1, mean2, std2):
         residual = x
 
-        # Old version
         out = self.conv1(x)
         out = self.in1(out, mean1, std1)
         out = F.relu(out)
         out = self.conv2(out)
         out = self.in2(out, mean1, std1)
-
-        # New version
-        # out = self.in1(x, mean1, std1)
-        # out = F.relu(out)
-        # out = self.conv1(out)
-        # out = self.in2(out, mean1, std1)
-        # out = F.relu(out)
-        # out = self.conv2(out)
 
         out = out + residual
         return out

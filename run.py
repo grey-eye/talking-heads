@@ -17,37 +17,20 @@ from dataset import preprocess_dataset, VoxCelebDataset
 
 import matplotlib.pyplot as plt
 
-GPU_DISTRIBUTION = {
+GPU = {
     'Embedder': 1,
     'Generator': 0,
     'Discriminator': 0,
-    'LossEG': 0,
+    'LossEG': 1,
     'LossD': 1,
 }
-
-
-class ParallelDiscriminator(DataParallel):
-    @property
-    def W(self):
-        return self.module.W
 
 
 # region Training
 def meta_train(gpu, dataset_path, continue_id):
     run_start = datetime.now()
     logging.info('===== META-TRAINING =====')
-
-    # region GPU / CPU -------------------------------------------------------------------------------------------------
-    if gpu:
-        dtype = torch.cuda.FloatTensor
-        torch.set_default_tensor_type(dtype)
-        logging.info(f'Running on GPU.')
-    else:
-        dtype = torch.FloatTensor
-        torch.set_default_tensor_type(dtype)
-        logging.info(f'Running on CPU.')
-
-    # endregion
+    logging.info(f'Running on {"GPU" if gpu else "CPU"}.')
 
     # region DATASET----------------------------------------------------------------------------------------------------
     logging.info(f'Training using dataset located in {dataset_path}')
@@ -68,9 +51,11 @@ def meta_train(gpu, dataset_path, continue_id):
 
     # region NETWORK ---------------------------------------------------------------------------------------------------
 
-    E = network.Embedder().type(dtype)
-    G = network.Generator().type(dtype)
-    D = network.Discriminator(len(raw_dataset)).type(dtype)
+    E = network.Embedder(GPU['Embedder'])
+    G = network.Generator(GPU['Generator'])
+    D = network.Discriminator(len(raw_dataset), GPU['Discriminator'])
+    criterion_E_G = network.LossEG(config.FEED_FORWARD, GPU['LossEG'])
+    criterion_D = network.LossD(GPU['LossD'])
 
     optimizer_E_G = Adam(
         params=list(E.parameters()) + list(G.parameters()),
@@ -81,20 +66,10 @@ def meta_train(gpu, dataset_path, continue_id):
         lr=config.LEARNING_RATE_D
     )
 
-    criterion_E_G = network.LossEG(config.FEED_FORWARD)
-    criterion_D = network.LossD()
-
     if continue_id is not None:
         E = load_model(E, continue_id)
         G = load_model(G, continue_id)
         D = load_model(D, continue_id)
-
-    if gpu:
-        E.cuda(GPU_DISTRIBUTION['Embedder'])
-        G.cuda(GPU_DISTRIBUTION['Generator'])
-        D.cuda(GPU_DISTRIBUTION['Discriminator'])
-        criterion_E_G.cuda(GPU_DISTRIBUTION['LossEG'])
-        criterion_D.cuda(GPU_DISTRIBUTION['LossD'])
 
     # endregion
 
@@ -111,9 +86,9 @@ def meta_train(gpu, dataset_path, continue_id):
         for batch_num, (i, video) in enumerate(dataset):
 
             # region PROCESS BATCH -------------------------------------------------------------------------------------
-
             batch_start = datetime.now()
-            video = video.type(dtype)  # [B, K+1, 2, C, W, H]
+
+            # video [B, K+1, 2, C, W, H]
 
             # Put one frame aside (frame t)
             t = video[:, -1, ...]  # [B, 2, C, W, H]
@@ -123,12 +98,8 @@ def meta_train(gpu, dataset_path, continue_id):
             # Calculate average encoding vector for video
             e_in = video.reshape(dims[0] * dims[1], dims[2], dims[3], dims[4], dims[5])  # [BxK, 2, C, W, H]
             x, y = e_in[:, 0, ...], e_in[:, 1, ...]
-            if gpu:
-                x, y = x.cuda(1), y.cuda(1)
             e_vectors = E(x, y).reshape(dims[0], dims[1], -1)  # B, K, len(e)
             e_hat = e_vectors.mean(dim=1)
-            if gpu:
-                e_hat = e_hat.cuda(0)
 
             # Generate frame using landmarks from frame t
             x_t, y_t = t[:, 0, ...], t[:, 1, ...]
@@ -141,17 +112,8 @@ def meta_train(gpu, dataset_path, continue_id):
             optimizer_E_G.zero_grad()
             optimizer_D.zero_grad()
 
-            # if gpu:
-            #     x_t = x_t.cuda(1)
-            #     x_hat = x_hat.cuda(1)
-            #     r_x = r_x.cuda(1)
-            #     r_x_hat = r_x_hat.cuda(1)
-
-            loss_E_G = criterion_E_G(x_t, x_hat, r_x_hat, e_hat, D.W[:, i].transpose(1, 0)).mean()
-            if gpu:
-                r_x, r_x_hat = r_x.cuda(1), r_x_hat.cuda(1)
-                loss_E_G = loss_E_G.cuda(1)
-            loss_D = criterion_D(r_x, r_x_hat).mean()
+            loss_E_G = criterion_E_G(x_t, x_hat, r_x_hat, e_hat, D.W[:, i].transpose(1, 0))
+            loss_D = criterion_D(r_x, r_x_hat)
             loss = loss_E_G + loss_D
             loss.backward()
 
@@ -159,16 +121,12 @@ def meta_train(gpu, dataset_path, continue_id):
             optimizer_D.step()
 
             # Optimize D again
-            # if gpu:
-            #     y_t, x_t = y_t.cuda(0), x_t.cuda(0)
             x_hat = G(y_t, e_hat).detach()
             r_x_hat, D_act_hat = D(x_hat, y_t, i)
             r_x, D_act = D(x_t, y_t, i)
-            if gpu:
-                r_x, r_x_hat = r_x.cuda(1), r_x_hat.cuda(1)
 
             optimizer_D.zero_grad()
-            loss_D = criterion_D(r_x, r_x_hat).mean()
+            loss_D = criterion_D(r_x, r_x_hat)
             loss_D.backward()
             optimizer_D.step()
 
@@ -232,7 +190,7 @@ def save_model(model, gpu, time_for_name=None):
     )
 
     if gpu:
-        m.cuda(GPU_DISTRIBUTION[type(m).__name__])
+        m.cuda(GPU[type(m).__name__])
     m.train()
 
     logging.info(f'Model saved: {filename}')

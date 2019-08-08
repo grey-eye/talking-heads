@@ -234,6 +234,7 @@ class VoxCelebDataset(Dataset):
             for filename in files
             if filename.endswith(extension)
         ]
+        self.files.sort()
         if subset_size is not None:
             self.files = self.files[:subset_size]
         self.length = len(self.files)
