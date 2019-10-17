@@ -29,7 +29,8 @@ class LossEG(nn.Module):
 
         # VGG19 Loss
         vgg19_x_hat = self.VGG19_AC(x_hat)
-        vgg19_x = self.VGG19_AC(x)
+        with torch.no_grad():
+            vgg19_x = self.VGG19_AC(x)
 
         vgg19_loss = 0
         for i in range(0, len(vgg19_x)):
@@ -37,7 +38,9 @@ class LossEG(nn.Module):
 
         # VGG Face Loss
         vgg_face_x_hat = self.VGG_FACE_AC(x_hat)
-        vgg_face_x = self.VGG_FACE_AC(x)
+
+        with torch.no_grad():
+            vgg_face_x = self.VGG_FACE_AC(x)
 
         vgg_face_loss = 0
         for i in range(0, len(vgg_face_x)):
