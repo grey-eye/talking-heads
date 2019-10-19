@@ -13,7 +13,7 @@ import PIL
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
-from face_alignment import FaceAlignment, LandmarksType
+#from face_alignment import FaceAlignment, LandmarksType
 from torch.utils.data import Dataset
 import torch
 

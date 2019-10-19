@@ -42,15 +42,15 @@ class Embedder(nn.Module):
 
         self.apply(weights_init)
         self.gpu = gpu
-        if gpu is not None:
-            self.cuda(gpu)
+        #if gpu is not None:
+        #    self.cuda("cuda")
 
     def forward(self, x, y):
         assert x.dim() == 4 and x.shape[1] == 3, "Both x and y must be tensors with shape [BxK, 3, W, H]."
         assert x.shape == y.shape, "Both x and y must be tensors with shape [BxK, 3, W, H]."
         if self.gpu is not None:
-            x = x.cuda(self.gpu)
-            y = y.cuda(self.gpu)
+            x = x.to(torch.device("cuda"))
+            y = y.to(torch.device("cuda"))
 
         # Concatenate x & y
         out = torch.cat((x, y), dim=1)  # [BxK, 6, 256, 256]
@@ -167,13 +167,25 @@ class Generator(nn.Module):
         out = self.in5_e(self.conv5(out))  # [B, 512, 8, 8]
         out = self.in6_e(self.conv6(out))  # [B, 512, 4, 4]
 
+        if torch.isnan(out[0, 0, 0, 0]):
+            print("nan------------Encode")
         # Residual layers
         out = self.res1(out, *self.slice_psi(psi_hat, 'res1'))
+        if torch.isnan(out[0, 0, 0, 0]):
+            print("nan------------Res")
         out = self.res2(out, *self.slice_psi(psi_hat, 'res2'))
+        if torch.isnan(out[0, 0, 0, 0]):
+            print("nan------------Res1")
         out = self.res3(out, *self.slice_psi(psi_hat, 'res3'))
+        if torch.isnan(out[0, 0, 0, 0]):
+            print("nan------------Res2")
         out = self.res4(out, *self.slice_psi(psi_hat, 'res4'))
+        if torch.isnan(out[0, 0, 0, 0]):
+            print("nan------------Res3")
         out = self.res5(out, *self.slice_psi(psi_hat, 'res5'))
 
+        if torch.isnan(out[0, 0, 0, 0]):
+            print("nan------------Res4")
         # Decode
         out = self.in6_d(self.deconv6(out, *self.slice_psi(psi_hat, 'deconv6')))  # [B, 512, 4, 4]
         out = self.in5_d(self.deconv5(out, *self.slice_psi(psi_hat, 'deconv5')))  # [B, 512, 16, 16]
@@ -183,7 +195,11 @@ class Generator(nn.Module):
         out = self.in2_d(self.deconv2(out, *self.slice_psi(psi_hat, 'deconv2')))  # [B, 64, 128, 128]
         out = self.in1_d(self.deconv1(out, *self.slice_psi(psi_hat, 'deconv1')))  # [B, 3, 256, 256]
 
+        if torch.isnan(out[0, 0, 0, 0]):
+            print("nan------------Deco")
         out = torch.sigmoid(out)
+        if torch.isnan(out[0, 0, 0, 0]):
+            print("nan------------Sig")
 
         return out
 

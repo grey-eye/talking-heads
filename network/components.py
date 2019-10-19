@@ -66,6 +66,8 @@ class AdaIn(nn.Module):
         feature = x.view(B, C, -1)
 
         std_feat = (torch.std(feature, dim=2) + self.eps).view(B, C, 1)
+        #std_feat = torch.var(feature, dim=2) + self.eps
+        #std_feat = std_feat.sqrt().view(B, C, 1)
         mean_feat = torch.mean(feature, dim=2).view(B, C, 1)
 
         adain = std_style * (feature - mean_feat) / std_feat + mean_style
@@ -225,10 +227,21 @@ class AdaptiveResidualBlock(nn.Module):
         residual = x
 
         out = self.conv1(x)
+        if torch.isnan(out[0, 0, 0, 0]):
+            print("-------nan  ada1")
         out = self.in1(out, mean1, std1)
+        if torch.isnan(out[0, 0, 0, 0]):
+            print("-------nan  ada2")
         out = F.relu(out)
+        if torch.isnan(out[0, 0, 0, 0]):
+            print("-------nan  adarelu")
+        temp = out
         out = self.conv2(out)
+        if torch.isnan(out[0, 0, 0, 0]):
+            print("-------nan  ada3")
         out = self.in2(out, mean1, std1)
+        if torch.isnan(out[0, 0, 0, 0]):
+            print("-------nan  ada4")
 
         out = out + residual
         return out

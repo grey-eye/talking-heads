@@ -18,11 +18,11 @@ from dataset import preprocess_dataset, VoxCelebDataset
 import matplotlib.pyplot as plt
 
 GPU = {
-    'Embedder': 1,
-    'Generator': 0,
-    'Discriminator': 0,
-    'LossEG': 1,
-    'LossD': 1,
+    'Embedder': [0, 1],
+    'Generator': 2,
+    'Discriminator': 3,
+    'LossEG': 3,
+    'LossD': 3,
 }
 
 
@@ -52,6 +52,7 @@ def meta_train(gpu, dataset_path, continue_id):
     # region NETWORK ---------------------------------------------------------------------------------------------------
 
     E = network.Embedder(GPU['Embedder'])
+    E = E.to(torch.device("cuda"))
     G = network.Generator(GPU['Generator'])
     D = network.Discriminator(len(raw_dataset), GPU['Discriminator'])
     criterion_E_G = network.LossEG(config.FEED_FORWARD, GPU['LossEG'])
@@ -71,6 +72,7 @@ def meta_train(gpu, dataset_path, continue_id):
         G = load_model(G, continue_id)
         D = load_model(D, continue_id)
 
+    E = DataParallel(E, GPU['Embedder'])
     # endregion
 
     # region TRAINING LOOP ---------------------------------------------------------------------------------------------
@@ -98,7 +100,8 @@ def meta_train(gpu, dataset_path, continue_id):
             # Calculate average encoding vector for video
             e_in = video.reshape(dims[0] * dims[1], dims[2], dims[3], dims[4], dims[5])  # [BxK, 2, C, W, H]
             x, y = e_in[:, 0, ...], e_in[:, 1, ...]
-            e_vectors = E(x, y).reshape(dims[0], dims[1], -1)  # B, K, len(e)
+            e_vectors = E(x, y)  # B, K, len(e)
+            e_vectors = e_vectors.reshape(dims[0], dims[1], -1)  # B, K, len(e)
             e_hat = e_vectors.mean(dim=1)
 
             # Generate frame using landmarks from frame t
@@ -106,13 +109,13 @@ def meta_train(gpu, dataset_path, continue_id):
             x_hat = G(y_t, e_hat)
 
             # Optimize E_G and D
-            r_x_hat, _ = D(x_hat, y_t, i)
-            r_x, _ = D(x_t, y_t, i)
+            r_x_hat, d_res_hat = D(x_hat, y_t, i)
+            r_x, d_res = D(x_t, y_t, i)
 
             optimizer_E_G.zero_grad()
             optimizer_D.zero_grad()
 
-            loss_E_G = criterion_E_G(x_t, x_hat, r_x_hat, e_hat, D.W[:, i].transpose(1, 0))
+            loss_E_G = criterion_E_G(x_t, x_hat, r_x_hat, d_res_hat, d_res, e_hat, D.W[:, i].transpose(1, 0))
             loss_D = criterion_D(r_x, r_x_hat)
             loss = loss_E_G + loss_D
             loss.backward()
@@ -177,9 +180,9 @@ def save_model(model, gpu, time_for_name=None):
 
     m = model.module if isinstance(model, DataParallel) else model
 
-    m.eval()
-    if gpu:
-        m.cpu()
+    #m.eval()
+    #if gpu:
+    #    m.cpu()
 
     if not os.path.exists(config.MODELS_DIR):
         os.makedirs(config.MODELS_DIR)
@@ -189,9 +192,9 @@ def save_model(model, gpu, time_for_name=None):
         os.path.join(config.MODELS_DIR, filename)
     )
 
-    if gpu:
-        m.cuda(GPU[type(m).__name__])
-    m.train()
+    #if gpu:
+    #    m.cuda(GPU[type(m).__name__])
+    #m.train()
 
     logging.info(f'Model saved: {filename}')
 
@@ -199,6 +202,13 @@ def save_model(model, gpu, time_for_name=None):
 def load_model(model, continue_id):
     filename = f'{type(model).__name__}_{continue_id}.pth'
     state_dict = torch.load(os.path.join(config.MODELS_DIR, filename))
+    if filename[0] == "D":
+        model_state_dict = model.state_dict()
+        state_dict["W"] = model_state_dict["W"]
+        state_dict["w_0"] = model_state_dict["w_0"]
+        state_dict["b"] = model_state_dict["b"]
+
+    
     model.load_state_dict(state_dict)
     return model
 
@@ -269,11 +279,12 @@ def main():
     logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
 
     # EXECUTE ----------------------------------------------------------------------------------------------------------
-    try:
+    try: 
         if args.subcommand == "meta-train":
+            print("1")
             meta_train(
                 dataset_path=args.dataset,
-                gpu=(torch.cuda.is_available() and args.gpu),
+                gpu=torch.cuda.is_available(),
                 continue_id=args.continue_id,
             )
         elif args.subcommand == "dataset":
