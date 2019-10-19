@@ -109,13 +109,13 @@ def meta_train(gpu, dataset_path, continue_id):
             x_hat = G(y_t, e_hat)
 
             # Optimize E_G and D
-            r_x_hat, d_res_hat = D(x_hat, y_t, i)
-            r_x, d_res = D(x_t, y_t, i)
+            r_x_hat, d_res_hat = D(x_hat, y_t, i, e_hat)
+            r_x, d_res = D(x_t, y_t, i, e_hat)
 
             optimizer_E_G.zero_grad()
             optimizer_D.zero_grad()
 
-            loss_E_G = criterion_E_G(x_t, x_hat, r_x_hat, d_res_hat, d_res, e_hat, D.W[:, i].transpose(1, 0))
+            loss_E_G = criterion_E_G(x_t, x_hat, r_x_hat, d_res_hat, d_res, e_hat)
             loss_D = criterion_D(r_x, r_x_hat)
             loss = loss_E_G + loss_D
             loss.backward()
@@ -124,9 +124,10 @@ def meta_train(gpu, dataset_path, continue_id):
             optimizer_D.step()
 
             # Optimize D again
+            e_hat = e_hat.detach()
             x_hat = G(y_t, e_hat).detach()
-            r_x_hat, D_act_hat = D(x_hat, y_t, i)
-            r_x, D_act = D(x_t, y_t, i)
+            r_x_hat, D_act_hat = D(x_hat, y_t, i, e_hat)
+            r_x, D_act = D(x_t, y_t, i, e_hat)
 
             optimizer_D.zero_grad()
             loss_D = criterion_D(r_x, r_x_hat)
@@ -204,7 +205,8 @@ def load_model(model, continue_id):
     state_dict = torch.load(os.path.join(config.MODELS_DIR, filename))
     if filename[0] == "D":
         model_state_dict = model.state_dict()
-        state_dict["W"] = model_state_dict["W"]
+        #state_dict["W"] = model_state_dict["W"]
+        del state_dict["W"]
         state_dict["w_0"] = model_state_dict["w_0"]
         state_dict["b"] = model_state_dict["b"]
 
@@ -281,7 +283,6 @@ def main():
     # EXECUTE ----------------------------------------------------------------------------------------------------------
     try: 
         if args.subcommand == "meta-train":
-            print("1")
             meta_train(
                 dataset_path=args.dataset,
                 gpu=torch.cuda.is_available(),

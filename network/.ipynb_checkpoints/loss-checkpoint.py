@@ -57,20 +57,19 @@ class LossEG(nn.Module):
     def loss_mch(self, e_hat, W_i):
         return F.l1_loss(W_i.reshape(-1), e_hat.reshape(-1)) * config.LOSS_MCH_WEIGHT
 
-    def forward(self, x, x_hat, r_x_hat, d_res_hat, d_res, e_hat):
+    def forward(self, x, x_hat, r_x_hat, d_res_hat, d_res, e_hat, W_i):
         if self.gpu is not None:
             x = x.cuda(self.gpu)
             x_hat = x_hat.cuda(self.gpu)
             r_x_hat = r_x_hat.cuda(self.gpu)
             e_hat = e_hat.cuda(self.gpu)
-            #W_i = W_i.cuda(self.gpu)
+            W_i = W_i.cuda(self.gpu)
 
         cnt = self.loss_cnt(x, x_hat)
         adv = self.loss_adv(r_x_hat, d_res, d_res_hat)
-        #mch = self.loss_mch(e_hat, W_i) if self.match_loss else 0
+        mch = self.loss_mch(e_hat, W_i) if self.match_loss else 0
 
-        return (cnt + adv).reshape(1)
-        #return (cnt + adv + mch).reshape(1)
+        return (cnt + adv + mch).reshape(1)
 
 
 class LossD(nn.Module):

@@ -33,6 +33,7 @@ def vgg_face(pretrained=False, **kwargs):
         kwargs['init_weights'] = False
     model = vgg.VGG(vgg.make_layers(vgg.cfgs['D'], batch_norm=False), num_classes=2622, **kwargs)
     if pretrained:
+        print("111111111111")
         model.load_state_dict(vgg_face_state_dict())
     return model
 
