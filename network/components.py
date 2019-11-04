@@ -228,7 +228,7 @@ class AdaptiveResidualBlock(nn.Module):
         out = self.in1(out, mean1, std1)
         out = F.relu(out)
         out = self.conv2(out)
-        out = self.in2(out, mean1, std1)
+        out = self.in2(out, mean2, std2)
 
         out = out + residual
         return out
